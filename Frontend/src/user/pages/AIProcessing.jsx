@@ -272,7 +272,8 @@ const AIProcessing = () => {
                     status: 'analyzing',
                     originalIssue: text,
                     capturedFileBase64: image_base64,
-                    ocrText: image_text
+                    ocrText: image_text,
+                    image_url: uploadedImageUrl || finalTicket.image_url
                 };
 
                 setAITicket(aiTicketObject);
