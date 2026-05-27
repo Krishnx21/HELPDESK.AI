@@ -344,7 +344,8 @@ const AIProcessing = () => {
                         highlights: [],
                         originalIssue: text,
                         capturedFileBase64: image_base64,
-                        ocrText: image_text
+                        ocrText: image_text,
+                        image_url: uploadedImageUrl
                     };
 
                     setAITicket(fallbackTicket);

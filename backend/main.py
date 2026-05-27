@@ -144,6 +144,7 @@ class TicketResponse(BaseModel):
     decision_factors: list[str] = []
     image_description: str = ""
     ocr_text: str = ""
+    image_url: str | None = None
     highlights: list[str] = []
     timeline: dict = {} # Map of step_name: timestamp
     env_metadata: dict = {} # IP, Hostname, Browser/OS
@@ -883,6 +884,7 @@ async def analyze_only(request_body: TicketRequest):
         decision_factors=decision_factors,
         image_description=gemini_analysis["image_description"],
         ocr_text=gemini_analysis["ocr_text"],
+        image_url=request_body.image_url,
         highlights=entities, # Use entities as highlights for now
         timeline=timeline,
         env_metadata=env_metadata,
@@ -1029,6 +1031,7 @@ async def analyze_stream(request_body: TicketRequest):
             "decision_factors": decision_factors,
             "image_description": gemini_analysis["image_description"],
             "ocr_text": gemini_analysis["ocr_text"],
+            "image_url": request_body.image_url,
             "highlights": entities,
             "timeline": timeline,
             "env_metadata": env_metadata,
