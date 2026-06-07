@@ -769,10 +769,13 @@ async def analyze_only(request_body: TicketRequest):
     def get_now_ist():
         return datetime.datetime.utcnow().isoformat() + "Z"
 
+    has_image = bool(request_body.image_base64)
     env_metadata = {
         "timestamp": get_now_ist(),
         "model_version": "3.0.0-PRO",
         "api_endpoint": "/ai/analyze",
+        "has_image_base64": has_image,
+        "image_base64_length": len(request_body.image_base64) if has_image else 0,
     }
 
     timeline = {"received": get_now_ist()}
@@ -780,10 +783,14 @@ async def analyze_only(request_body: TicketRequest):
     # --- Vision Logic (OCR Awareness) ---
     gemini_analysis = {"ocr_text": request_body.image_text or "", "image_description": ""}
 
+
+    vision_requested = bool(request_body.image_base64)
     if request_body.image_base64 and not gemini_analysis["ocr_text"]:
         try:
             print("[AI] Detecting visual context via Gemini...")
-            vision_result = gemini_service.analyze_image(request_body.image_base64, text)
+            if not gemini_service:
+                raise RuntimeError("Gemini service not initialized")
+            vision_result = gemini_service.analyze_image(request_body.image_base64)
             gemini_analysis.update(vision_result)
         except Exception as e:
             print(f"[VISION ERROR] {e}")
@@ -891,6 +898,8 @@ async def analyze_only(request_body: TicketRequest):
     hours_map = {"Critical": 2, "High": 8, "Medium": 24, "Low": 72}
     sla_hours = hours_map.get(classification["priority"], 72)
     sla_breach_dt = datetime.datetime.utcnow() + datetime.timedelta(hours=sla_hours)
+
+    env_metadata["vision_requested"] = vision_requested
 
     return TicketResponse(
         ticket_id=str(uuid.uuid4()),  # Temporary ID
