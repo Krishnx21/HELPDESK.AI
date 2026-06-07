@@ -6,6 +6,7 @@ Priority and other fields are derived from the category mapping.
 
 import os
 import json
+import re
 import torch
 import torch.nn.functional as F
 from transformers import DistilBertTokenizerFast, DistilBertForSequenceClassification
@@ -51,19 +52,23 @@ class ClassifierService:
         self.id2label = None
         self.label2id = None
         self._loaded = False
+        self._fallback_mode = False
 
     def load(self):
-        """Load model, tokenizer, and label mappings from disk."""
+        """Load model, tokenizer, and label mappings from disk. Falls back to regex-based fallback if model is missing."""
         if self._loaded:
             return
 
         abs_dir = os.path.abspath(SAVE_DIR)
 
         if not os.path.exists(os.path.join(abs_dir, "model.safetensors")):
-            raise FileNotFoundError(
-                f"Classifier model not found at {abs_dir}. "
-                "Please ensure model files are present."
+            print(
+                f"[WARNING] Classifier model not found at {abs_dir}. "
+                "Falling back to regex-based classification."
             )
+            self._fallback_mode = True
+            self._loaded = True
+            return
 
         # Load label mappings
         with open(os.path.join(abs_dir, "id2label.json"), "r") as f:
@@ -85,8 +90,13 @@ class ClassifierService:
     def predict(self, text: str) -> dict:
         """
         Predict category, subcategory, priority, auto_resolve, assigned_team, and confidence.
+        Falls back to regex-based classification if model is not available.
         """
         self.load()
+
+        # Fallback mode: use regex-based classification
+        if self._fallback_mode:
+            return self._predict_fallback(text)
 
         encoding = self.tokenizer(
             text,
@@ -147,4 +157,34 @@ class ClassifierService:
             "auto_resolve": auto_resolve,
             "assigned_team": assigned_team,
             "confidence": confidence,
+        }
+
+    def _predict_fallback(self, text: str) -> dict:
+        """Fallback classification using regex patterns when model is unavailable."""
+        lower_text = text.lower()
+        
+        # Keyword patterns for categories
+        patterns = {
+            "Access": [r"login|password|access|authentication|account|permission|mfa|oauth", 0.85],
+            "Network": [r"ip address|hostname|connection|network|dns|firewall|vpn|connectivity|latency|routing", 0.80],
+            "Software": [r"crash|load|error|bug|failing|application|software|sql|database|production", 0.75],
+            "Hardware": [r"disk|memory|cpu|monitor|keyboard|mouse|printer|battery", 0.70],
+        }
+        
+        matched_category = "General Support"
+        matched_confidence = 0.5
+        
+        for category, (pattern, conf) in patterns.items():
+            if re.search(pattern, lower_text):
+                matched_category = category
+                matched_confidence = conf
+                break
+        
+        return {
+            "category": matched_category,
+            "subcategory": "General",
+            "priority": "Medium",
+            "auto_resolve": False,
+            "assigned_team": TEAM_MAP.get(matched_category, "General Support"),
+            "confidence": matched_confidence,
         }
