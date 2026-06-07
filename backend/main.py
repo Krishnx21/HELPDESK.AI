@@ -11,7 +11,7 @@ import json
 import datetime
 import traceback
 import warnings
-import logging
+import loggingalso get cuur
 import hashlib
 from contextlib import asynccontextmanager
 
@@ -28,7 +28,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.encoders import jsonable_encoder
 import asyncio
 from pathlib import Path
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 
 # Load environment variables from backend/.env
@@ -108,8 +108,8 @@ class TicketSaveRequest(BaseModel):
     company_id: str | None = None
     sla_breach_at: str
     metadata: dict
-    entities: list = []
-    solution_steps: list = []
+    entities: list = Field(default_factory=list)
+    solution_steps: list = Field(default_factory=list)
     ocr_text: str = ""
     needs_review: bool = False
     routing_confidence: float
@@ -418,7 +418,7 @@ async def readiness_check():
 class TroubleshootRequest(BaseModel):
     text: str
     category: str
-    history: list[dict] = []
+    history: list[dict] = Field(default_factory=list)
 
 class TroubleshootResponse(BaseModel):
     step_text: str
@@ -727,8 +727,12 @@ async def analyze_ticket(request_body: TicketRequest, request: Request):
             text = f"{text} {local_ocr_text}".strip()
             print(f"[AI] OCR added {len(local_ocr_text)} chars to context.")
 
-    # Initalize Timeline
+    # Ensure OCR-enriched content is used by the analysis pipeline
+    if local_ocr_text:
+        request_body = request_body.copy(update={"text": text})
+
     return await analyze_only(request_body)
+
 
 @app.post("/ai/analyze")
 async def analyze_only(request_body: TicketRequest):
