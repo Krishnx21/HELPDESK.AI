@@ -11,7 +11,7 @@ import json
 import datetime
 import traceback
 import warnings
-import loggingalso get cuur
+import logging
 import hashlib
 from contextlib import asynccontextmanager
 
@@ -38,6 +38,7 @@ load_dotenv(dotenv_path=env_path)
 # Initialize Supabase Client (Service Role for backend bypass)
 try:
     from supabase import create_client, Client
+
     url = os.environ.get("SUPABASE_URL")
     key = os.environ.get("SUPABASE_SERVICE_KEY")
     if not url or not key:
@@ -55,7 +56,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from backend.services.classifier_service import ClassifierService
 from backend.services.classifier_v2 import classifier_v2
-from backend.services.classifier_v3 import classifier_v3 # V3 Power Model
+from backend.services.classifier_v3 import classifier_v3  # V3 Power Model
 from backend.services.ner_service import NERService
 from backend.services.duplicate_service import DuplicateService
 from backend.services.rag_service import RagService
@@ -68,28 +69,35 @@ def get_system_settings(company_id: str) -> dict:
     defaults = {
         "ai_confidence_threshold": 0.80,
         "duplicate_sensitivity": 0.85,
-        "enable_auto_resolve": False
+        "enable_auto_resolve": False,
     }
     if not supabase or not company_id:
         return defaults
     try:
-        res = supabase.table("system_settings").select(
-            "ai_confidence_threshold, duplicate_sensitivity, enable_auto_resolve"
-        ).eq("company_id", company_id).single().execute()
+        res = (
+            supabase.table("system_settings")
+            .select("ai_confidence_threshold, duplicate_sensitivity, enable_auto_resolve")
+            .eq("company_id", company_id)
+            .single()
+            .execute()
+        )
         if res.data:
             return {**defaults, **res.data}
     except Exception as e:
         print(f"[WARNING] Could not fetch system_settings for company_id={company_id}: {e}")
     return defaults
+
+
 class TicketRequest(BaseModel):
     text: str
     image_base64: str = ""
-    image_text: str = "" # Keep for backward compatibility
+    image_text: str = ""  # Keep for backward compatibility
     user_id: str | None = None
     company: str | None = None
     image_url: str | None = None
     confidence_threshold: float = 0.20
     duplicate_sensitivity: float = 0.85
+
 
 class TicketSaveRequest(BaseModel):
     user_id: str
@@ -141,13 +149,13 @@ class TicketResponse(BaseModel):
     confidence: float
     needs_review: bool = False
     reasoning: str = ""
-    decision_factors: list[str] = []
+    decision_factors: list[str] = Field(default_factory=list)
     image_description: str = ""
     ocr_text: str = ""
     image_url: str | None = None
-    highlights: list[str] = []
-    timeline: dict = {} # Map of step_name: timestamp
-    env_metadata: dict = {} # IP, Hostname, Browser/OS
+    highlights: list[str] = Field(default_factory=list)
+    timeline: dict = Field(default_factory=dict)  # Map of step_name: timestamp
+    env_metadata: dict = Field(default_factory=dict)  # IP, Hostname, Browser/OS
     sla_breach_at: str | None = None
     version: str = "2.1.0-Neural-Diagnostic"
 
@@ -171,9 +179,9 @@ class TicketRecord(BaseModel):
     created_at: str
     updated_at: str | None = None
     last_user_viewed_at: str | None = None
-    messages: list[Message] = []
-    metadata: dict = {}
-    timeline: dict = {} # Milestones: created, analyzed, triaged, routed, in_progress, resolved
+    messages: list[Message] = Field(default_factory=list)
+    metadata: dict = Field(default_factory=dict)
+    timeline: dict = Field(default_factory=dict)  # Milestones: created, analyzed, triaged, routed, in_progress, resolved
 
 
 # --- In-Memory Database (to be replaced with SQL later) ---
@@ -201,12 +209,14 @@ rag_service = RagService()
 
 try:
     from backend.services.gemini_service import GeminiService
+
     gemini_service = GeminiService()
 except ImportError:
     gemini_service = None
 
 try:
     from backend.services.ocr_service import OCRService
+
     ocr_service = OCRService()
 except ImportError:
     ocr_service = None
@@ -235,14 +245,17 @@ async def lifespan(app: FastAPI):
         rag_service.load()
     except Exception as e:
         print(f"[WARNING] RAG service not loaded: {e}")
-    
+
     if gemini_service:
-        print(f"[Startup] Gemini Service: {'Initialized' if gemini_service._initialized else 'FAILED (Key missing or SDK error)'}")
+        print(
+            f"[Startup] Gemini Service: {'Initialized' if gemini_service._initialized else 'FAILED (Key missing or SDK error)'}"
+        )
     else:
         print("[Startup] Gemini Service: NOT LOADED (Import failed)")
 
     print("[Startup] Classifier V2 Shadow: Ready.")
     print("[Startup] Ready.")
+
     # Strict health checks: fail loudly when core model assets are unavailable.
     # Set ALLOW_DEGRADED_STARTUP=1 to permit degraded startup for local/dev convenience.
     try:
@@ -254,7 +267,9 @@ async def lifespan(app: FastAPI):
     ner_loaded_flag = getattr(ner_service, "_loaded", False)
 
     if strict_mode and not classifier_loaded_flag:
-        raise RuntimeError("[Startup-FATAL] Classifier assets not loaded. Set ALLOW_DEGRADED_STARTUP=1 to bypass.")
+        raise RuntimeError(
+            "[Startup-FATAL] Classifier assets not loaded. Set ALLOW_DEGRADED_STARTUP=1 to bypass."
+        )
     yield
     print("[Shutdown] Cleaning up ...")
 
@@ -386,7 +401,7 @@ async def health_check():
 async def readiness_check():
     require_supabase = os.environ.get("REQUIRE_SUPABASE", "false").lower() == "true"
     allow_degraded = os.environ.get("ALLOW_DEGRADED_STARTUP", "0") == "1"
-    
+
     checks = {
         "api": True,
         "classifier_loaded": classifier_service._loaded,
@@ -399,9 +414,13 @@ async def readiness_check():
 
     # In degraded mode, duplicate and RAG services are optional
     if allow_degraded:
-        required_checks = {k: v for k, v in checks.items() if k not in ["duplicate_index_loaded", "rag_loaded"]}
+        required_checks = {
+            k: v
+            for k, v in checks.items()
+            if k not in ["duplicate_index_loaded", "rag_loaded"]
+        }
         all_required_pass = all(required_checks.values())
-        
+
         if all_required_pass:
             return ReadinessResponse(status="ready", checks=checks)
     else:
@@ -420,10 +439,12 @@ class TroubleshootRequest(BaseModel):
     category: str
     history: list[dict] = Field(default_factory=list)
 
+
 class TroubleshootResponse(BaseModel):
     step_text: str
     options: list[str]
     is_final: bool
+
 
 @app.post("/ai/troubleshoot", response_model=TroubleshootResponse)
 async def troubleshoot(request: TroubleshootRequest):
@@ -432,13 +453,13 @@ async def troubleshoot(request: TroubleshootRequest):
         return TroubleshootResponse(
             step_text="AI Troubleshooting is currently unavailable.",
             options=["Continue to tracking"],
-            is_final=True
+            is_final=True,
         )
-    
+
     result = gemini_service.get_troubleshooting_step(
         request.text,
         request.history,
-        request.category
+        request.category,
     )
     return TroubleshootResponse(**result)
 
@@ -447,24 +468,24 @@ class BugReportAnalysisRequest(BaseModel):
     bug_title: str
     description: str
     steps_to_reproduce: str = ""
-    console_errors: list[str] = []
+    console_errors: list[str] = Field(default_factory=list)
+
 
 class BugReportAnalysisResponse(BaseModel):
     probable_cause: str
+
 
 @app.post("/ai/analyze_bug", response_model=BugReportAnalysisResponse)
 async def analyze_bug(request: BugReportAnalysisRequest):
     """Analyze a bug report using Gemini to generate a Probable Cause."""
     if not gemini_service or not gemini_service._initialized:
-        return BugReportAnalysisResponse(
-            probable_cause="AI Diagnostics are currently unavailable."
-        )
-    
+        return BugReportAnalysisResponse(probable_cause="AI Diagnostics are currently unavailable.")
+
     cause = gemini_service.analyze_bug_report(
         request.bug_title,
         request.description,
         request.steps_to_reproduce,
-        request.console_errors
+        request.console_errors,
     )
     return BugReportAnalysisResponse(probable_cause=cause)
 
@@ -473,6 +494,7 @@ async def analyze_bug(request: BugReportAnalysisRequest):
 # Admin Correction Logging endpoint
 # ---------------------------------------------------------------------------
 CORRECTIONS_LOG_PATH = Path(__file__).parent / "data" / "corrections_log.json"
+
 
 @app.post("/ai/log_correction")
 async def log_correction(raw_request: Request):
@@ -494,7 +516,8 @@ async def log_correction(raw_request: Request):
 
     # Only log if something actually changed
     changed_fields = [
-        field for field in ["category", "subcategory", "priority", "assigned_team"]
+        field
+        for field in ["category", "subcategory", "priority", "assigned_team"]
         if original_prediction.get(field) != corrected_prediction.get(field)
     ]
 
@@ -509,7 +532,7 @@ async def log_correction(raw_request: Request):
         "corrected_prediction": corrected_prediction,
         "changed_fields": changed_fields,
         "confidence": confidence,
-        "timestamp": datetime.datetime.utcnow().isoformat() + "Z"
+        "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
     }
 
     try:
@@ -540,20 +563,18 @@ async def get_tickets(company_id: str | None = None):
     """Fetch persistent tickets from Supabase."""
     if not supabase:
         raise HTTPException(status_code=500, detail="Database connection not initialized")
-    
+
     query = supabase.table("tickets").select("*").order("created_at", desc=True)
     if company_id:
         query = query.eq("company_id", company_id)
-        
+
     res = query.execute()
     return res.data
 
+
 @app.post("/tickets/save")
 async def save_ticket(request_body: TicketSaveRequest):
-    """
-    OFFICIAL PERSISTENCE: Saves the analyzed ticket to Supabase.
-    This is called AFTER the user confirms the analysis results.
-    """
+    """OFFICIAL PERSISTENCE: Saves the analyzed ticket to Supabase."""
     if not supabase:
         raise HTTPException(status_code=500, detail="Supabase connection not initialized.")
 
@@ -585,16 +606,15 @@ async def save_ticket(request_body: TicketSaveRequest):
         # Validate tenant consistency and authorization.
         profile_company_id = profile.get("company_id")
         if final_data.get("company_id"):
-            # User provided company_id: verify it matches their profile.
             if profile_company_id and final_data["company_id"] != profile_company_id:
                 user_hash = hashlib.sha256(str(request_body.user_id).encode()).hexdigest()[:8]
-                logger.warning(f"Tenant mismatch: user {user_hash} attempted {final_data['company_id']}, assigned to {profile_company_id}")
+                logger.warning(
+                    f"Tenant mismatch: user {user_hash} attempted {final_data['company_id']}, assigned to {profile_company_id}"
+                )
                 raise HTTPException(status_code=403, detail="User not authorized for this tenant")
         elif profile_company_id:
-            # Backfill company_id from profile.
             final_data["company_id"] = profile_company_id
         elif request_body.user_id:
-            # User has no tenant assignment.
             raise HTTPException(status_code=400, detail="User has no tenant assignment")
 
         # Backfill company name if missing.
@@ -604,12 +624,10 @@ async def save_ticket(request_body: TicketSaveRequest):
         user_hash = hashlib.sha256(str(request_body.user_id).encode()).hexdigest()[:8]
         logger.info(f"Tenant linkage: user_hash={user_hash}, company_id={final_data.get('company_id')}")
 
-
         res = supabase.table("tickets").insert(final_data).execute()
-        
         if not res.data:
             raise Exception("Failed to insert ticket into database.")
-            
+
         ticket_id = res.data[0]["id"]
 
         duplicate_indexed = True
@@ -623,25 +641,33 @@ async def save_ticket(request_body: TicketSaveRequest):
             except Exception as index_error:
                 duplicate_indexed = False
                 duplicate_index_warning = "Duplicate index update failed."
-                print(f"[WARNING] {duplicate_index_warning} ticket_id={ticket_id} error={index_error}")
+                print(
+                    f"[WARNING] {duplicate_index_warning} ticket_id={ticket_id} error={index_error}"
+                )
         else:
             duplicate_indexed = False
-            duplicate_index_warning = "Duplicate index update skipped: no description or subject text was provided."
+            duplicate_index_warning = (
+                "Duplicate index update skipped: no description or subject text was provided."
+            )
             print(f"[WARNING] {duplicate_index_warning}")
-        
+
         # Add initial system diagnostic message
         msg = "Our Neural Engine has successfully triaged your issue and routed it to the designated team."
         if final_data["auto_resolve"]:
-            msg = "AI Auto-Resolution active: A verified solution has been identified. Please review the attached resolution steps."
+            msg = (
+                "AI Auto-Resolution active: A verified solution has been identified. Please review the attached resolution steps."
+            )
 
-        supabase.table("ticket_messages").insert({
-            "ticket_id": ticket_id,
-            "sender_id": "00000000-0000-0000-0000-000000000000", # System ID
-            "sender_name": "AI Assistant",
-            "sender_role": "admin",
-            "message": msg
-        }).execute()
-        
+        supabase.table("ticket_messages").insert(
+            {
+                "ticket_id": ticket_id,
+                "sender_id": "00000000-0000-0000-0000-000000000000",  # System ID
+                "sender_name": "AI Assistant",
+                "sender_role": "admin",
+                "message": msg,
+            }
+        ).execute()
+
         response = {"status": "success", "ticket_id": ticket_id, "duplicate_indexed": duplicate_indexed}
         if duplicate_index_warning:
             response["duplicate_index_warning"] = duplicate_index_warning
@@ -651,12 +677,13 @@ async def save_ticket(request_body: TicketSaveRequest):
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.get("/tickets/{ticket_id}")
 async def get_ticket_by_id(ticket_id: str):
     """Fetch single persistent ticket."""
     if not supabase:
         raise HTTPException(status_code=500, detail="Database connection not initialized")
-    
+
     res = supabase.table("tickets").select("*").eq("id", ticket_id).single().execute()
     if not res.data:
         raise HTTPException(status_code=404, detail="Ticket not found")
@@ -666,11 +693,10 @@ async def get_ticket_by_id(ticket_id: str):
 @app.post("/tickets", response_model=TicketRecord)
 async def create_ticket(ticket: TicketRecord):
     """Save a new ticket into the system."""
-    # Check for duplicates before adding
     existing = next((t for t in TICKETS_DB if t.ticket_id == ticket.ticket_id), None)
     if existing:
         return existing
-        
+
     TICKETS_DB.append(ticket)
     print(f"[DB] Ticket #{ticket.ticket_id} created for user {ticket.owner_id}")
     return ticket
@@ -681,13 +707,12 @@ async def update_ticket(ticket_id: str, updates: dict):
     """Partially update a ticket's fields (e.g., status, viewed_at)."""
     for i, ticket in enumerate(TICKETS_DB):
         if str(ticket.ticket_id) == str(ticket_id):
-            # Convert to dict, update, then back to model
             ticket_dict = ticket.dict()
             ticket_dict.update(updates)
             updated_ticket = TicketRecord(**ticket_dict)
             TICKETS_DB[i] = updated_ticket
             return updated_ticket
-    
+
     raise HTTPException(status_code=404, detail="Ticket not found")
 
 
@@ -697,26 +722,20 @@ async def update_ticket(ticket_id: str, updates: dict):
 @app.post("/ai/analyze_ticket", response_model=TicketResponse)
 @limiter.limit("10/minute")
 async def analyze_ticket(request_body: TicketRequest, request: Request):
-    """
-    Main endpoint for analyzing a new ticket using the cascade of local AI models.
-    """
+    """Main endpoint for analyzing a new ticket using the cascade of local AI models."""
+
     text = request_body.text
 
     settings = get_system_settings(request_body.company)
     confidence_threshold = settings["ai_confidence_threshold"]
     duplicate_sensitivity = settings["duplicate_sensitivity"]
     enable_auto_resolve = settings["enable_auto_resolve"]
-    
-    # Grab client metadata
+
     client_ip = request.client.host if request.client else "unknown"
     user_agent = request.headers.get("user-agent", "unknown")
     origin_host = request.headers.get("origin", "unknown")
-    
-    env_metadata = {
-        "ip": client_ip,
-        "user_agent": user_agent,
-        "origin": origin_host
-    }
+
+    env_metadata = {"ip": client_ip, "user_agent": user_agent, "origin": origin_host}
 
     # --- Layer 1: Local OCR (CPU, no API required) ---
     local_ocr_text = ""
@@ -736,37 +755,31 @@ async def analyze_ticket(request_body: TicketRequest, request: Request):
 
 @app.post("/ai/analyze")
 async def analyze_only(request_body: TicketRequest):
-    """
-    PERFORMANCE UPGRADE: AI Analysis phase only. 
-    Does NOT persist to DB. This allows the user to review the analysis 
-    and duplicate check before committing to a ticket creation.
-    """
+    """PERFORMANCE UPGRADE: AI Analysis phase only (read-only, no persistence)."""
+
     text = request_body.text
-    print(f"[AI] Starting Analysis (READ-ONLY) for: {text[:50]}...") 
+    print(f"[AI] Starting Analysis (READ-ONLY) for: {text[:50]}...")
+
     settings = get_system_settings(request_body.company)
     confidence_threshold = settings["ai_confidence_threshold"]
     duplicate_sensitivity = settings["duplicate_sensitivity"]
     enable_auto_resolve = settings["enable_auto_resolve"]
-    
+
     # --- Context & Environment ---
-    import datetime
     def get_now_ist():
         return datetime.datetime.utcnow().isoformat() + "Z"
 
     env_metadata = {
         "timestamp": get_now_ist(),
         "model_version": "3.0.0-PRO",
-        "api_endpoint": "/ai/analyze"
+        "api_endpoint": "/ai/analyze",
     }
-    
+
     timeline = {"received": get_now_ist()}
 
     # --- Vision Logic (OCR Awareness) ---
-    gemini_analysis = {
-        "ocr_text": request_body.image_text or "",
-        "image_description": ""
-    }
-    
+    gemini_analysis = {"ocr_text": request_body.image_text or "", "image_description": ""}
+
     if request_body.image_base64 and not gemini_analysis["ocr_text"]:
         try:
             print("[AI] Detecting visual context via Gemini...")
@@ -775,38 +788,41 @@ async def analyze_only(request_body: TicketRequest):
         except Exception as e:
             print(f"[VISION ERROR] {e}")
 
-    summary = text[:100] + ("…" if len(text) > 100 else "") 
+    summary = text[:100] + ("…" if len(text) > 100 else "")
 
     # --- Classification ---
     try:
         classification_v3_res = classifier_v3.predict(text)
         if "error" in classification_v3_res:
-            # Fallback to V1
             classification = classifier_service.predict(text)
         else:
-            # Parse V3 output
             cat = classification_v3_res.get("Category", {}).get("prediction", "Unknown")
             sub = classification_v3_res.get("Subcategory", {}).get("prediction", "Unknown")
             pri = classification_v3_res.get("priority", {}).get("prediction", "Medium")
             conf = classification_v3_res.get("Category", {}).get("confidence", 0.0)
-            
+
             from backend.services.classifier_service import TEAM_MAP, AUTO_RESOLVE_SUBS
+
             assigned_team = TEAM_MAP.get(cat, "General Support")
             auto_resolve = sub in AUTO_RESOLVE_SUBS
-            
+
             classification = {
                 "category": cat,
                 "subcategory": sub,
                 "priority": pri,
                 "auto_resolve": auto_resolve,
                 "assigned_team": assigned_team,
-                "confidence": float(conf)
+                "confidence": float(conf),
             }
-    except Exception as e:
+    except Exception:
         traceback.print_exc()
         classification = {
-            "category": "Unknown", "subcategory": "Unknown", "priority": "Medium",
-            "auto_resolve": False, "assigned_team": "General Support", "confidence": 0.0,
+            "category": "Unknown",
+            "subcategory": "Unknown",
+            "priority": "Medium",
+            "auto_resolve": False,
+            "assigned_team": "General Support",
+            "confidence": 0.0,
         }
 
     timeline["ai_analyzed"] = get_now_ist()
@@ -817,7 +833,7 @@ async def analyze_only(request_body: TicketRequest):
         entities = ner_service.extract_entities(text)
     except Exception:
         entities = []
-    
+
     timeline["metadata_harvested"] = get_now_ist()
 
     # --- Duplicate detection ---
@@ -833,7 +849,9 @@ async def analyze_only(request_body: TicketRequest):
         if rag_match:
             classification["auto_resolve"] = True
             classification["assigned_team"] = "Auto-Resolve AI"
-            classification["confidence"] = max(classification["confidence"], float(rag_match["similarity"]))
+            classification["confidence"] = max(
+                classification["confidence"], float(rag_match["similarity"])
+            )
             print(f"[RAG SUCCESS] Found solution for: '{rag_match['title']}'")
     except Exception as e:
         print(f"[RAG ERROR] {e}")
@@ -843,7 +861,9 @@ async def analyze_only(request_body: TicketRequest):
     if classification["confidence"] > confidence_threshold:
         decision_factors.append(f"High confidence match for '{classification['subcategory']}'")
     if entities:
-        decision_factors.append(f"Detected entities: {', '.join([e['text'] for e in entities[:2]])}")
+        decision_factors.append(
+            f"Detected entities: {', '.join([e['text'] for e in entities[:2]])}"
+        )
     if dup_result["is_duplicate"]:
         decision_factors.append(f"Found similar incident ({int(dup_result['similarity']*100)}%)")
     if rag_match:
@@ -858,22 +878,22 @@ async def analyze_only(request_body: TicketRequest):
         classification["auto_resolve"] = True
     else:
         classification["auto_resolve"] = False
+
     if classification["auto_resolve"]:
         reasoning += " Flagged for AI auto-resolution via Knowledge Base." if rag_match else " Flagged for auto-resolution."
-    
+
     timeline["routed"] = get_now_ist()
-    
+
     # --- Gemini Summary ---
     if gemini_service and gemini_service._initialized:
         summary = gemini_service.get_summary(text)
-    
-    # Convert priority to SLA breached timestamp (for preview)
+
     hours_map = {"Critical": 2, "High": 8, "Medium": 24, "Low": 72}
     sla_hours = hours_map.get(classification["priority"], 72)
     sla_breach_dt = datetime.datetime.utcnow() + datetime.timedelta(hours=sla_hours)
 
     return TicketResponse(
-        ticket_id=str(uuid.uuid4()), # Temporary ID
+        ticket_id=str(uuid.uuid4()),  # Temporary ID
         summary=summary,
         category=classification["category"],
         subcategory=classification["subcategory"],
@@ -889,18 +909,17 @@ async def analyze_only(request_body: TicketRequest):
         image_description=gemini_analysis["image_description"],
         ocr_text=gemini_analysis["ocr_text"],
         image_url=request_body.image_url,
-        highlights=entities, # Use entities as highlights for now
+        highlights=entities,  # Use entities as highlights for now
         timeline=timeline,
         env_metadata=env_metadata,
-        sla_breach_at=sla_breach_dt.isoformat() + "Z"
+        sla_breach_at=sla_breach_dt.isoformat() + "Z",
     )
+
 
 @app.post("/ai/analyze_stream")
 async def analyze_stream(request_body: TicketRequest):
-    """
-    REAL-TIME SSE ENDPOINT: Streams the AI progress to the frontend dynamically.
-    """
-    import datetime
+    """REAL-TIME SSE ENDPOINT: Streams the AI progress to the frontend dynamically."""
+
     def get_now_ist():
         return datetime.datetime.utcnow().isoformat() + "Z"
 
@@ -909,15 +928,14 @@ async def analyze_stream(request_body: TicketRequest):
         env_metadata = {
             "timestamp": get_now_ist(),
             "model_version": "3.0.0-PRO",
-            "api_endpoint": "/ai/analyze_stream"
+            "api_endpoint": "/ai/analyze_stream",
         }
-        timeline = {"received": get_now_ist()} 
+        timeline = {"received": get_now_ist()}
         settings = get_system_settings(request_body.company)
         confidence_threshold = settings["ai_confidence_threshold"]
         duplicate_sensitivity = settings["duplicate_sensitivity"]
         enable_auto_resolve = settings["enable_auto_resolve"]
 
-        # 1. Reading
         yield f"data: {json.dumps({'step': 'Reading your message', 'status': 'in_progress'})}\n\n"
         await asyncio.sleep(0.5)
 
@@ -926,12 +944,11 @@ async def analyze_stream(request_body: TicketRequest):
             try:
                 vision_result = gemini_service.analyze_image(request_body.image_base64, text)
                 gemini_analysis.update(vision_result)
-            except Exception as e:
+            except Exception:
                 pass
 
-        summary = text[:100] + ("…" if len(text) > 100 else "") 
+        summary = text[:100] + ("…" if len(text) > 100 else "")
 
-        # 2. NER
         yield f"data: {json.dumps({'step': 'Extracting technical entities', 'status': 'in_progress'})}\n\n"
         await asyncio.sleep(0.2)
         try:
@@ -940,7 +957,6 @@ async def analyze_stream(request_body: TicketRequest):
             entities = []
         timeline["metadata_harvested"] = get_now_ist()
 
-        # 3. Classification
         yield f"data: {json.dumps({'step': 'Detecting category and priority', 'status': 'in_progress'})}\n\n"
         await asyncio.sleep(0.2)
         try:
@@ -952,28 +968,32 @@ async def analyze_stream(request_body: TicketRequest):
                 sub = classification_v3_res.get("Subcategory", {}).get("prediction", "Unknown")
                 pri = classification_v3_res.get("priority", {}).get("prediction", "Medium")
                 conf = classification_v3_res.get("Category", {}).get("confidence", 0.0)
-                
+
                 from backend.services.classifier_service import TEAM_MAP, AUTO_RESOLVE_SUBS
+
                 assigned_team = TEAM_MAP.get(cat, "General Support")
                 auto_resolve = sub in AUTO_RESOLVE_SUBS
-                
+
                 classification = {
                     "category": cat,
                     "subcategory": sub,
                     "priority": pri,
                     "auto_resolve": auto_resolve,
                     "assigned_team": assigned_team,
-                    "confidence": float(conf)
+                    "confidence": float(conf),
                 }
-        except Exception as e:
+        except Exception:
             classification = {
-                "category": "Unknown", "subcategory": "Unknown", "priority": "Medium",
-                "auto_resolve": False, "assigned_team": "General Support", "confidence": 0.0,
+                "category": "Unknown",
+                "subcategory": "Unknown",
+                "priority": "Medium",
+                "auto_resolve": False,
+                "assigned_team": "General Support",
+                "confidence": 0.0,
             }
         timeline["ai_analyzed"] = get_now_ist()
         timeline["triaged"] = get_now_ist()
 
-        # 4. Duplicates
         yield f"data: {json.dumps({'step': 'Checking duplicate issues', 'status': 'in_progress'})}\n\n"
         await asyncio.sleep(0.2)
         try:
@@ -981,7 +1001,6 @@ async def analyze_stream(request_body: TicketRequest):
         except Exception:
             dup_result = {"is_duplicate": False, "duplicate_ticket_id": None, "similarity": 0.0}
 
-        # 5. RAG / Solutions
         yield f"data: {json.dumps({'step': 'Finding possible solutions', 'status': 'in_progress'})}\n\n"
         await asyncio.sleep(0.2)
         rag_match = None
@@ -990,15 +1009,19 @@ async def analyze_stream(request_body: TicketRequest):
             if rag_match:
                 classification["auto_resolve"] = True
                 classification["assigned_team"] = "Auto-Resolve AI"
-                classification["confidence"] = max(classification["confidence"], float(rag_match["similarity"]))
-        except Exception as e:
+                classification["confidence"] = max(
+                    classification["confidence"], float(rag_match["similarity"])
+                )
+        except Exception:
             pass
 
         decision_factors = []
         if classification["confidence"] > confidence_threshold:
             decision_factors.append(f"High confidence match for '{classification['subcategory']}'")
         if entities:
-            decision_factors.append(f"Detected entities: {', '.join([e['text'] for e in entities[:2]])}")
+            decision_factors.append(
+                f"Detected entities: {', '.join([e['text'] for e in entities[:2]])}"
+            )
         if dup_result["is_duplicate"]:
             decision_factors.append(f"Found similar incident ({int(dup_result['similarity']*100)}%)")
         if rag_match:
@@ -1006,15 +1029,20 @@ async def analyze_stream(request_body: TicketRequest):
 
         if not enable_auto_resolve:
             classification["auto_resolve"] = False
+
         reasoning = f"Categorized as '{classification['category']}' - {classification['subcategory']}."
         if classification["auto_resolve"]:
-            reasoning += " Flagged for AI auto-resolution via Knowledge Base." if rag_match else " Flagged for auto-resolution."
-        
+            reasoning += (
+                " Flagged for AI auto-resolution via Knowledge Base."
+                if rag_match
+                else " Flagged for auto-resolution."
+            )
+
         timeline["routed"] = get_now_ist()
 
         if gemini_service and gemini_service._initialized:
             summary = gemini_service.get_summary(text)
-        
+
         hours_map = {"Critical": 2, "High": 8, "Medium": 24, "Low": 72}
         sla_hours = hours_map.get(classification["priority"], 72)
         sla_breach_dt = datetime.datetime.utcnow() + datetime.timedelta(hours=sla_hours)
@@ -1039,21 +1067,19 @@ async def analyze_stream(request_body: TicketRequest):
             "highlights": entities,
             "timeline": timeline,
             "env_metadata": env_metadata,
-            "sla_breach_at": sla_breach_dt.isoformat() + "Z"
+            "sla_breach_at": sla_breach_dt.isoformat() + "Z",
         }
 
-        # 6. Final Result
         yield f"data: {json.dumps({'step': 'done', 'result': jsonable_encoder(ticket_response_dict)})}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
+
 @app.post("/ai/analyze_ticket/legacy")
 async def legacy_analyze_and_save(request_body: TicketRequest):
-    """
-    BACKWARD COMPATIBILITY: Strictly performs analysis only. 
-    Does NOT persist to DB to avoid foreign key violations.
-    """
+    """BACKWARD COMPATIBILITY: analysis-only; does NOT persist to DB."""
     return await analyze_only(request_body)
+
 
 @app.post("/ai/analyze-v2")
 async def analyze_ticket_v2(request: TicketRequest):
@@ -1067,10 +1093,11 @@ async def analyze_ticket_v2(request: TicketRequest):
             "priority": prediction["priority"]["prediction"],
             "auto_resolve": prediction["auto_resolve"]["prediction"].lower() == "true",
             "assigned_team": prediction["assigned_team"]["prediction"],
-            "confidence": prediction["category"]["confidence"]
+            "confidence": prediction["category"]["confidence"],
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 # ---------------------------------------------------------------------------
 # Clean cookie-based Supabase Auth endpoints for /auth/me backward-compatibility
@@ -1080,14 +1107,11 @@ REFRESH_COOKIE = "refresh_token"
 ACCESS_MAX_AGE = 60 * 60
 REFRESH_MAX_AGE = 60 * 60 * 24 * 7
 
+
 def _cookie_kwargs() -> dict:
     secure = os.getenv("ENV", "production").lower() != "development"
-    return {
-        "httponly": True,
-        "secure": secure,
-        "samesite": "strict",
-        "path": "/",
-    }
+    return {"httponly": True, "secure": secure, "samesite": "strict", "path": "/"}
+
 
 def extract_token(request: Request) -> str | None:
     cookie_token = request.cookies.get(ACCESS_COOKIE)
@@ -1098,28 +1122,21 @@ def extract_token(request: Request) -> str | None:
         return auth.split(" ", 1)[1].strip() or None
     return None
 
+
 def _set_session_cookies(response: Response, session) -> None:
     if not session or not getattr(session, "access_token", None):
         return
-    response.set_cookie(
-        ACCESS_COOKIE,
-        session.access_token,
-        max_age=ACCESS_MAX_AGE,
-        **_cookie_kwargs(),
-    )
+    response.set_cookie(ACCESS_COOKIE, session.access_token, max_age=ACCESS_MAX_AGE, **_cookie_kwargs())
     refresh = getattr(session, "refresh_token", None)
     if refresh:
-        response.set_cookie(
-            REFRESH_COOKIE,
-            refresh,
-            max_age=REFRESH_MAX_AGE,
-            **_cookie_kwargs(),
-        )
+        response.set_cookie(REFRESH_COOKIE, refresh, max_age=REFRESH_MAX_AGE, **_cookie_kwargs())
+
 
 def _clear_session_cookies(response: Response) -> None:
     kwargs = _cookie_kwargs()
     response.delete_cookie(ACCESS_COOKIE, path=kwargs["path"])
     response.delete_cookie(REFRESH_COOKIE, path=kwargs["path"])
+
 
 async def get_current_user(request: Request) -> dict:
     token = extract_token(request)
@@ -1130,10 +1147,8 @@ async def get_current_user(request: Request) -> dict:
     try:
         result = supabase.auth.get_user(token)
     except Exception as exc:
-        raise HTTPException(
-            status_code=401,
-            detail=f"Invalid session: {exc}",
-        ) from exc
+        raise HTTPException(status_code=401, detail=f"Invalid session: {exc}") from exc
+
     user = getattr(result, "user", None) or (result.get("user") if isinstance(result, dict) else None)
     if not user:
         raise HTTPException(status_code=401, detail="Invalid session")
@@ -1143,9 +1158,11 @@ async def get_current_user(request: Request) -> dict:
         return user.dict()
     return dict(user)
 
+
 class LoginBody(BaseModel):
     email: str
     password: str
+
 
 class SignupBody(BaseModel):
     email: str
@@ -1154,14 +1171,13 @@ class SignupBody(BaseModel):
     role: str | None = "user"
     company: str | None = None
 
+
 @app.post("/auth/login")
 async def auth_login(body: LoginBody, response: Response):
     if not supabase:
         raise HTTPException(status_code=503, detail="Database connection offline")
     try:
-        result = supabase.auth.sign_in_with_password(
-            {"email": body.email, "password": body.password}
-        )
+        result = supabase.auth.sign_in_with_password({"email": body.email, "password": body.password})
     except Exception as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
 
@@ -1174,10 +1190,12 @@ async def auth_login(body: LoginBody, response: Response):
     user_payload = user.model_dump() if hasattr(user, "model_dump") else dict(user)
     return {"user": user_payload, "message": "Session cookies set"}
 
+
 @app.post("/auth/signup")
 async def auth_signup(body: SignupBody, response: Response):
     if not supabase:
         raise HTTPException(status_code=503, detail="Database connection offline")
+
     metadata = {}
     if body.full_name:
         metadata["full_name"] = body.full_name
@@ -1201,13 +1219,16 @@ async def auth_signup(body: SignupBody, response: Response):
     user = getattr(result, "user", None)
     if session:
         _set_session_cookies(response, session)
+
     user_payload = user.model_dump() if user and hasattr(user, "model_dump") else None
     return {"user": user_payload, "message": "Signup complete"}
+
 
 @app.post("/auth/logout")
 async def auth_logout(response: Response):
     _clear_session_cookies(response)
     return {"ok": True}
+
 
 @app.get("/auth/me")
 async def auth_me(user: dict = Depends(get_current_user)):
