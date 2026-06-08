@@ -494,18 +494,28 @@ async def analyze_bug(request: BugReportAnalysisRequest):
 # Admin Correction Logging endpoint
 # ---------------------------------------------------------------------------
 CORRECTIONS_LOG_PATH = Path(__file__).parent / "data" / "corrections_log.json"
+import threading
+_corrections_lock = threading.Lock()
 
 
 @app.post("/ai/log_correction")
-async def log_correction(raw_request: Request):
-    """Log an admin correction when the AI prediction differs from the human decision."""
+async def log_correction(raw_request: Request, user: dict = Depends(get_current_user)):
+    """Log an admin correction when the AI prediction differs from the human decision.
+    
+    Requires authentication. Only admin users can log corrections.
+    """
     try:
         body = await raw_request.json()
     except Exception as e:
         print(f"[CORRECTION ERROR] Could not parse request body: {e}")
-        return {"status": "error", "message": "Invalid JSON body"}
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
 
-    print(f"[CORRECTION RECEIVED] Payload keys: {list(body.keys())}")
+    # Verify user has admin/senior role
+    user_role = user.get("user_metadata", {}).get("role", "user")
+    if user_role not in ["admin", "senior_analyst"]:
+        raise HTTPException(status_code=403, detail="Only admins can log corrections")
+
+    print(f"[CORRECTION RECEIVED] User: {user.get('id')} | Payload keys: {list(body.keys())}")
 
     ticket_id = str(body.get("ticket_id", "unknown"))
     original_text = str(body.get("original_text", ""))
@@ -532,27 +542,29 @@ async def log_correction(raw_request: Request):
         "corrected_prediction": corrected_prediction,
         "changed_fields": changed_fields,
         "confidence": confidence,
+        "corrected_by": user.get("id"),
         "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
     }
 
     try:
-        if CORRECTIONS_LOG_PATH.exists() and CORRECTIONS_LOG_PATH.stat().st_size > 2:
-            with open(CORRECTIONS_LOG_PATH, "r", encoding="utf-8") as f:
-                logs = json.load(f)
-        else:
-            logs = []
+        with _corrections_lock:
+            if CORRECTIONS_LOG_PATH.exists() and CORRECTIONS_LOG_PATH.stat().st_size > 2:
+                with open(CORRECTIONS_LOG_PATH, "r", encoding="utf-8") as f:
+                    logs = json.load(f)
+            else:
+                logs = []
 
-        logs.append(entry)
+            logs.append(entry)
 
-        with open(CORRECTIONS_LOG_PATH, "w", encoding="utf-8") as f:
-            json.dump(logs, f, indent=2)
+            with open(CORRECTIONS_LOG_PATH, "w", encoding="utf-8") as f:
+                json.dump(logs, f, indent=2)
 
         print(f"[CORRECTION SAVED] Ticket ID: {ticket_id} | Changed: {changed_fields}")
         return {"status": "saved", "changed_fields": changed_fields}
 
     except Exception as e:
         print(f"[CORRECTION ERROR] Could not save: {e}")
-        return {"status": "error", "message": str(e)}
+        raise HTTPException(status_code=500, detail="Failed to save correction")
 
 
 # ---------------------------------------------------------------------------
@@ -679,15 +691,35 @@ async def save_ticket(request_body: TicketSaveRequest):
 
 
 @app.get("/tickets/{ticket_id}")
-async def get_ticket_by_id(ticket_id: str):
-    """Fetch single persistent ticket."""
+async def get_ticket_by_id(ticket_id: str, user: dict = Depends(get_current_user)):
+    """Fetch single persistent ticket. Requires authentication."""
     if not supabase:
         raise HTTPException(status_code=500, detail="Database connection not initialized")
 
+    # Resolve user's company_id
+    user_id = user.get("id")
+    try:
+        profile_res = (
+            supabase.table("profiles")
+            .select("company_id")
+            .eq("id", user_id)
+            .single()
+            .execute()
+        )
+        user_company_id = profile_res.data.get("company_id") if profile_res.data else None
+    except Exception:
+        raise HTTPException(status_code=403, detail="Could not verify user company")
+
+    # Fetch ticket and verify ownership
     res = supabase.table("tickets").select("*").eq("id", ticket_id).single().execute()
     if not res.data:
         raise HTTPException(status_code=404, detail="Ticket not found")
-    return res.data
+
+    ticket = res.data
+    if ticket.get("company_id") != user_company_id:
+        raise HTTPException(status_code=403, detail="Not authorized to access this ticket")
+
+    return ticket
 
 
 @app.post("/tickets", response_model=TicketRecord)
