@@ -558,6 +558,10 @@ async def log_correction(raw_request: Request):
 # ---------------------------------------------------------------------------
 # Ticket operations (Now via Supabase)
 # ---------------------------------------------------------------------------
+async def require_current_user(request: Request) -> dict:
+    return await get_current_user(request)
+
+
 @app.get("/tickets")
 async def get_tickets(company_id: str | None = None):
     """Fetch persistent tickets from Supabase."""
@@ -691,10 +695,15 @@ async def get_ticket_by_id(ticket_id: str):
 
 
 @app.post("/tickets", response_model=TicketRecord)
-async def create_ticket(ticket: TicketRecord):
+async def create_ticket(ticket: TicketRecord, user: dict = Depends(require_current_user)):
     """Save a new ticket into the system."""
+    if str(ticket.owner_id) != str(user.get("id")):
+        raise HTTPException(status_code=403, detail="Cannot create a ticket for another user")
+
     existing = next((t for t in TICKETS_DB if t.ticket_id == ticket.ticket_id), None)
     if existing:
+        if str(existing.owner_id) != str(user.get("id")):
+            raise HTTPException(status_code=403, detail="Not authorized to access this ticket")
         return existing
 
     TICKETS_DB.append(ticket)
@@ -703,12 +712,20 @@ async def create_ticket(ticket: TicketRecord):
 
 
 @app.patch("/tickets/{ticket_id}", response_model=TicketRecord)
-async def update_ticket(ticket_id: str, updates: dict):
+async def update_ticket(
+    ticket_id: str,
+    updates: dict,
+    user: dict = Depends(require_current_user),
+):
     """Partially update a ticket's fields (e.g., status, viewed_at)."""
     for i, ticket in enumerate(TICKETS_DB):
         if str(ticket.ticket_id) == str(ticket_id):
+            if str(ticket.owner_id) != str(user.get("id")):
+                raise HTTPException(status_code=403, detail="Not authorized to update this ticket")
             ticket_dict = ticket.dict()
             ticket_dict.update(updates)
+            ticket_dict["owner_id"] = ticket.owner_id
+            ticket_dict["ticket_id"] = ticket.ticket_id
             updated_ticket = TicketRecord(**ticket_dict)
             TICKETS_DB[i] = updated_ticket
             return updated_ticket
