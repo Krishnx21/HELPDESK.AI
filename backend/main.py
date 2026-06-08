@@ -558,15 +558,39 @@ async def log_correction(raw_request: Request):
 # ---------------------------------------------------------------------------
 # Ticket operations (Now via Supabase)
 # ---------------------------------------------------------------------------
+async def get_user_company_id(user: dict) -> str:
+    user_id = user.get("id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid authenticated user")
+    try:
+        profile_res = (
+            supabase.table("profiles")
+            .select("company_id")
+            .eq("id", user_id)
+            .single()
+            .execute()
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=403, detail="Could not verify user company") from exc
+
+    company_id = profile_res.data.get("company_id") if profile_res.data else None
+    if not company_id:
+        raise HTTPException(status_code=403, detail="User has no company assignment")
+    return company_id
+
+
 @app.get("/tickets")
-async def get_tickets(company_id: str | None = None):
+async def get_tickets(user: dict = Depends(get_current_user), company_id: str | None = None):
     """Fetch persistent tickets from Supabase."""
     if not supabase:
         raise HTTPException(status_code=500, detail="Database connection not initialized")
 
+    user_company_id = await get_user_company_id(user)
+    if company_id and company_id != user_company_id:
+        raise HTTPException(status_code=403, detail="Not authorized to access this tenant")
+
     query = supabase.table("tickets").select("*").order("created_at", desc=True)
-    if company_id:
-        query = query.eq("company_id", company_id)
+    query = query.eq("company_id", user_company_id)
 
     res = query.execute()
     return res.data
@@ -679,12 +703,20 @@ async def save_ticket(request_body: TicketSaveRequest):
 
 
 @app.get("/tickets/{ticket_id}")
-async def get_ticket_by_id(ticket_id: str):
+async def get_ticket_by_id(ticket_id: str, user: dict = Depends(get_current_user)):
     """Fetch single persistent ticket."""
     if not supabase:
         raise HTTPException(status_code=500, detail="Database connection not initialized")
 
-    res = supabase.table("tickets").select("*").eq("id", ticket_id).single().execute()
+    user_company_id = await get_user_company_id(user)
+    res = (
+        supabase.table("tickets")
+        .select("*")
+        .eq("id", ticket_id)
+        .eq("company_id", user_company_id)
+        .single()
+        .execute()
+    )
     if not res.data:
         raise HTTPException(status_code=404, detail="Ticket not found")
     return res.data
