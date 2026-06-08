@@ -54,12 +54,22 @@ class RagService:
         Embed the input text and query Supabase for a matching article.
         Returns the article text if found above threshold, else None.
         """
+        if not self._loaded and not self._load_failed:
+            try:
+                self.load()
+            except Exception as e:
+                print(f"[RAG] Search unavailable because model load failed: {e}")
+                return None
+
         if not self._loaded or not self.supabase:
             if self._load_failed:
                 print("[RAG] DEGRADED: Knowledge base search skipped (model not available)")
             return None
 
         try:
+            threshold = min(max(float(threshold), 0.0), 1.0)
+            match_count = max(1, min(int(match_count), 10))
+
             # Generate Embedding vector (list of 384 floats)
             vector = self.model.encode(text).tolist()
 
