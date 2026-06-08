@@ -43,7 +43,10 @@ MAX_JSON_SIZE = int(os.environ.get("MAX_JSON_SIZE", "10")) * 1024 * 1024  # 10MB
 MAX_IMAGE_BASE64_CHARS = int(os.environ.get("MAX_IMAGE_BASE64_CHARS", "5000000"))  # ~3.75MB raw bytes (base64 chars)
 
 # Request ID tracking for observability
-_request_context = {}  # context-local storage for request IDs
+# Use context-local storage to avoid cross-request bleed in async environments.
+from contextvars import ContextVar
+_request_id_ctx: ContextVar[str | None] = ContextVar("request_id", default=None)
+
 
 # Initialize Supabase Client (Service Role for backend bypass)
 try:
@@ -354,16 +357,19 @@ async def add_request_id_tracking(request: Request, call_next):
     request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
     request.state.request_id = request_id
     
-    # Store in context for logging
-    _request_context[id(request)] = request_id
+    # Store request id in request scope for potential downstream usage.
+    # (We no longer write to a global dict.)
+    _request_id_ctx.set(request_id)
+
     
     try:
         response = await call_next(request)
         response.headers["X-Request-ID"] = request_id
         return response
     finally:
-        # Clean up context
-        _request_context.pop(id(request), None)
+        # Clear request-scoped context
+        _request_id_ctx.set(None)
+
 
 # Rate limiter — 10 AI requests per minute per IP (free tier protection)
 limiter = Limiter(key_func=get_remote_address)
@@ -866,8 +872,20 @@ async def analyze_ticket(request_body: TicketRequest, request: Request):
     # --- Layer 1: Local OCR (CPU, no API required) ---
     local_ocr_text = ""
     if request_body.image_base64 and ocr_service:
+        # Validate/normalize OCR image payload to avoid crashes/DoS from malformed base64.
+        from backend.ocr_json_safety import sanitize_and_validate_base64_image
+
+        try:
+            safe_b64 = sanitize_and_validate_base64_image(
+                request_body.image_base64,
+                max_chars=MAX_IMAGE_BASE64_CHARS,
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=f"Invalid image_base64: {e}") from e
+
         print("[AI] Extracting text via local OCR...")
-        local_ocr_text = ocr_service.extract_text(request_body.image_base64)
+        local_ocr_text = ocr_service.extract_text(safe_b64)
+
         if local_ocr_text:
             text = f"{text} {local_ocr_text}".strip()
             print(f"[AI] OCR added {len(local_ocr_text)} chars to context.")
