@@ -39,6 +39,9 @@ load_dotenv(dotenv_path=env_path)
 MAX_UPLOAD_SIZE = int(os.environ.get("MAX_UPLOAD_SIZE", "100")) * 1024 * 1024  # 100MB default
 MAX_JSON_SIZE = int(os.environ.get("MAX_JSON_SIZE", "10")) * 1024 * 1024  # 10MB default
 
+# OCR / image constraints
+MAX_IMAGE_BASE64_CHARS = int(os.environ.get("MAX_IMAGE_BASE64_CHARS", "5000000"))  # ~3.75MB raw bytes (base64 chars)
+
 # Request ID tracking for observability
 _request_context = {}  # context-local storage for request IDs
 
