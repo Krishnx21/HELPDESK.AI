@@ -89,9 +89,9 @@ def get_system_settings(company_id: str) -> dict:
 
 
 class TicketRequest(BaseModel):
-    text: str
-    image_base64: str = ""
-    image_text: str = ""  # Keep for backward compatibility
+    text: str = Field(..., min_length=1, max_length=10000)
+    image_base64: str = Field(default="", max_length=12_000_000)
+    image_text: str = Field(default="", max_length=10000)  # Keep for backward compatibility
     user_id: str | None = None
     company: str | None = None
     image_url: str | None = None
