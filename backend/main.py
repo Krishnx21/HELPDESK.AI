@@ -949,7 +949,12 @@ async def analyze_stream(request_body: TicketRequest):
         await asyncio.sleep(0.5)
 
         gemini_analysis = {"ocr_text": request_body.image_text or "", "image_description": ""}
-        if request_body.image_base64 and not gemini_analysis["ocr_text"]:
+        if (
+            request_body.image_base64
+            and not gemini_analysis["ocr_text"]
+            and gemini_service
+            and gemini_service._initialized
+        ):
             try:
                 # GeminiService.analyze_image expects only (image_base64)
                 vision_result = gemini_service.analyze_image(request_body.image_base64)
