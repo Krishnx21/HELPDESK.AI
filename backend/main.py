@@ -114,13 +114,13 @@ class TicketSaveRequest(BaseModel):
     image_url: str | None = None
     company: str | None = None
     company_id: str | None = None
-    sla_breach_at: str
-    metadata: dict
+    sla_breach_at: str | None = None
+    metadata: dict = Field(default_factory=dict)
     entities: list = Field(default_factory=list)
     solution_steps: list = Field(default_factory=list)
     ocr_text: str = ""
     needs_review: bool = False
-    routing_confidence: float
+    routing_confidence: float = 0.0
 
 
 class DuplicateInfo(BaseModel):
@@ -559,14 +559,33 @@ async def log_correction(raw_request: Request):
 # Ticket operations (Now via Supabase)
 # ---------------------------------------------------------------------------
 @app.get("/tickets")
-async def get_tickets(company_id: str | None = None):
-    """Fetch persistent tickets from Supabase."""
+async def get_tickets(user: dict = Depends(get_current_user), company_id: str | None = None):
+    """Fetch persistent tickets from Supabase. Requires authentication."""
     if not supabase:
         raise HTTPException(status_code=500, detail="Database connection not initialized")
 
+    # Resolve user's company_id from profile
+    user_id = user.get("id")
+    try:
+        profile_res = (
+            supabase.table("profiles")
+            .select("company_id")
+            .eq("id", user_id)
+            .single()
+            .execute()
+        )
+        user_company_id = profile_res.data.get("company_id") if profile_res.data else None
+        if not user_company_id:
+            raise HTTPException(status_code=403, detail="User has no company assignment")
+    except Exception as e:
+        raise HTTPException(status_code=403, detail="Could not verify user company")
+
+    # If company_id is specified, verify user owns it
+    if company_id and company_id != user_company_id:
+        raise HTTPException(status_code=403, detail="Not authorized to access this company's tickets")
+
     query = supabase.table("tickets").select("*").order("created_at", desc=True)
-    if company_id:
-        query = query.eq("company_id", company_id)
+    query = query.eq("company_id", user_company_id)
 
     res = query.execute()
     return res.data
