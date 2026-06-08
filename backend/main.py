@@ -1179,7 +1179,6 @@ class SignupBody(BaseModel):
     email: str
     password: str
     full_name: str | None = None
-    role: str | None = "user"
     company: str | None = None
 
 
@@ -1210,8 +1209,7 @@ async def auth_signup(body: SignupBody, response: Response):
     metadata = {}
     if body.full_name:
         metadata["full_name"] = body.full_name
-    if body.role:
-        metadata["role"] = body.role
+    metadata["role"] = "user"
     if body.company:
         metadata["company"] = body.company
 
