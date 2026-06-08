@@ -5,6 +5,7 @@ Uses sentence-transformers all-MiniLM-L6-v2 to detect similar tickets.
 
 import uuid
 import os
+import threading
 from sentence_transformers import SentenceTransformer, util
 
 SIMILARITY_THRESHOLD = 0.70
@@ -17,6 +18,7 @@ class DuplicateService:
         self._load_failed = False
         # In-memory store: list of (ticket_id, embedding, text)
         self._tickets: list[tuple[str, object, str]] = []
+        self._tickets_lock = threading.Lock()
         self.storage_file = os.path.join(os.path.dirname(__file__), "..", "data", "case_history_cache.json")
         os.makedirs(os.path.dirname(self.storage_file), exist_ok=True)
 
@@ -47,10 +49,13 @@ class DuplicateService:
                 try:
                     with open(self.storage_file, "r") as f:
                         data = json.load(f)
+                        loaded_tickets = []
                         for item in data:
                             text = item["text"]
                             embedding = self.model.encode(text, convert_to_tensor=True)
-                            self._tickets.append((item["ticket_id"], embedding, text))
+                            loaded_tickets.append((item["ticket_id"], embedding, text))
+                        with self._tickets_lock:
+                            self._tickets.extend(loaded_tickets)
                     print(f"[DuplicateService] Loaded {len(self._tickets)} tickets.")
                 except Exception as e:
                     print(f"[DuplicateService] Error loading storage: {e}")
@@ -70,19 +75,22 @@ class DuplicateService:
         import json
         data = []
         try:
-            os.makedirs(os.path.dirname(self.storage_file), exist_ok=True)
-            if os.path.exists(self.storage_file):
-                with open(self.storage_file, "r") as f:
-                    try:
-                        data = json.load(f)
-                        if not isinstance(data, list):
+            with self._tickets_lock:
+                os.makedirs(os.path.dirname(self.storage_file), exist_ok=True)
+                if os.path.exists(self.storage_file):
+                    with open(self.storage_file, "r", encoding="utf-8") as f:
+                        try:
+                            data = json.load(f)
+                            if not isinstance(data, list):
+                                data = []
+                        except json.JSONDecodeError:
                             data = []
-                    except:
-                        data = []
-            
-            data.append({"ticket_id": ticket_id, "text": text})
-            with open(self.storage_file, "w") as f:
-                json.dump(data, f, indent=2)
+
+                data.append({"ticket_id": ticket_id, "text": text})
+                tmp_file = f"{self.storage_file}.tmp"
+                with open(tmp_file, "w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=2)
+                os.replace(tmp_file, self.storage_file)
             print(f"[DuplicateService] Indexed ticket {ticket_id} to case history.")
         except Exception as e:
             print(f"[DuplicateService] Failed to save to disk: {e}")
@@ -94,7 +102,8 @@ class DuplicateService:
             print(f"[DuplicateService] DEGRADED: Skipping embedding for ticket {ticket_id} (model not available)")
             return
         embedding = self.model.encode(text, convert_to_tensor=True)
-        self._tickets.append((ticket_id, embedding, text))
+        with self._tickets_lock:
+            self._tickets.append((ticket_id, embedding, text))
         self.save_to_disk(ticket_id, text)
 
     def check_duplicate(self, text: str, threshold: float = None) -> dict:
@@ -126,7 +135,10 @@ class DuplicateService:
         # Use provided threshold or default to global constant
         active_threshold = threshold if threshold is not None else SIMILARITY_THRESHOLD
 
-        if not self._tickets:
+        with self._tickets_lock:
+            tickets_snapshot = list(self._tickets)
+
+        if not tickets_snapshot:
             return {
                 "is_duplicate": False,
                 "duplicate_ticket_id": None,
@@ -138,7 +150,7 @@ class DuplicateService:
         best_score = 0.0
         best_id = None
 
-        for ticket_id, stored_emb, _ in self._tickets:
+        for ticket_id, stored_emb, _ in tickets_snapshot:
             score = util.cos_sim(query_embedding, stored_emb).item()
             if score > best_score:
                 best_score = score
