@@ -658,19 +658,26 @@ async def save_ticket(request_body: TicketSaveRequest):
                 "AI Auto-Resolution active: A verified solution has been identified. Please review the attached resolution steps."
             )
 
-        supabase.table("ticket_messages").insert(
-            {
-                "ticket_id": ticket_id,
-                "sender_id": "00000000-0000-0000-0000-000000000000",  # System ID
-                "sender_name": "AI Assistant",
-                "sender_role": "admin",
-                "message": msg,
-            }
-        ).execute()
+        message_warning = None
+        try:
+            supabase.table("ticket_messages").insert(
+                {
+                    "ticket_id": ticket_id,
+                    "sender_id": "00000000-0000-0000-0000-000000000000",  # System ID
+                    "sender_name": "AI Assistant",
+                    "sender_role": "admin",
+                    "message": msg,
+                }
+            ).execute()
+        except Exception as message_error:
+            message_warning = "Initial ticket message creation failed."
+            print(f"[WARNING] {message_warning} ticket_id={ticket_id} error={message_error}")
 
         response = {"status": "success", "ticket_id": ticket_id, "duplicate_indexed": duplicate_indexed}
         if duplicate_index_warning:
             response["duplicate_index_warning"] = duplicate_index_warning
+        if message_warning:
+            response["message_warning"] = message_warning
         return response
 
     except Exception as e:
