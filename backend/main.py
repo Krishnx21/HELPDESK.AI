@@ -760,10 +760,22 @@ async def analyze_only(request_body: TicketRequest):
     text = request_body.text
     print(f"[AI] Starting Analysis (READ-ONLY) for: {text[:50]}...")
 
+    # ---- Safe defaults to prevent UnboundLocalError ----
+    summary = text[:100] + ("…" if len(text) > 100 else "")
+    classification = {
+        "category": "Unknown",
+        "subcategory": "Unknown",
+        "priority": "Medium",
+        "auto_resolve": False,
+        "assigned_team": "General Support",
+        "confidence": 0.0,
+    }
+
     settings = get_system_settings(request_body.company)
     confidence_threshold = settings["ai_confidence_threshold"]
     duplicate_sensitivity = settings["duplicate_sensitivity"]
     enable_auto_resolve = settings["enable_auto_resolve"]
+
 
     # --- Context & Environment ---
     def get_now_ist():
