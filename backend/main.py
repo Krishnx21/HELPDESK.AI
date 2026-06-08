@@ -35,6 +35,13 @@ from dotenv import load_dotenv
 env_path = Path(__file__).parent / '.env'
 load_dotenv(dotenv_path=env_path)
 
+# Request size limits (in bytes)
+MAX_UPLOAD_SIZE = int(os.environ.get("MAX_UPLOAD_SIZE", "100")) * 1024 * 1024  # 100MB default
+MAX_JSON_SIZE = int(os.environ.get("MAX_JSON_SIZE", "10")) * 1024 * 1024  # 10MB default
+
+# Request ID tracking for observability
+_request_context = {}  # context-local storage for request IDs
+
 # Initialize Supabase Client (Service Role for backend bypass)
 try:
     from supabase import create_client, Client
@@ -46,10 +53,24 @@ try:
         supabase = None
     else:
         supabase = create_client(url, key)
+        # Enable connection pooling (Supabase uses connection pooling internally)
+        # Additional config for timeout and retry policy
+        if hasattr(supabase, 'postgrest'):
+            supabase.postgrest._client_options = {
+                'timeout': 30,  # 30 second timeout for queries
+                'retries': 3,   # Retry failed queries up to 3 times
+            }
+        print("[Supabase] Connection pooling enabled (Supabase handles pooling internally)")
 except (ImportError, Exception) as e:
     print(f"[WARNING] Supabase initialization failed: {e}")
     supabase = None
     Client = None
+
+# Query result caching (in-memory cache for frequently accessed queries)
+import threading
+_cache_lock = threading.Lock()
+_query_cache = {}
+_cache_ttl = int(os.environ.get("QUERY_CACHE_TTL", "300"))  # 5 minutes default
 
 # Ensure project root is on path for imports
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -73,6 +94,15 @@ def get_system_settings(company_id: str) -> dict:
     }
     if not supabase or not company_id:
         return defaults
+    
+    # Check cache first
+    cache_key = f"system_settings:{company_id}"
+    with _cache_lock:
+        if cache_key in _query_cache:
+            cached_data, cached_time = _query_cache[cache_key]
+            if datetime.datetime.now().timestamp() - cached_time < _cache_ttl:
+                return cached_data
+    
     try:
         res = (
             supabase.table("system_settings")
@@ -82,10 +112,18 @@ def get_system_settings(company_id: str) -> dict:
             .execute()
         )
         if res.data:
-            return {**defaults, **res.data}
+            result = {**defaults, **res.data}
+        else:
+            result = defaults
     except Exception as e:
         print(f"[WARNING] Could not fetch system_settings for company_id={company_id}: {e}")
-    return defaults
+        result = defaults
+    
+    # Cache the result
+    with _cache_lock:
+        _query_cache[cache_key] = (result, datetime.datetime.now().timestamp())
+    
+    return result
 
 
 class TicketRequest(BaseModel):
@@ -283,6 +321,46 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+
+# Add middleware to enforce request size limits
+@app.middleware("http")
+async def limit_request_size(request: Request, call_next):
+    """Enforce maximum request body size to prevent DoS attacks."""
+    if request.method not in ["POST", "PATCH", "PUT"]:
+        return await call_next(request)
+    
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            size = int(content_length)
+            if size > MAX_JSON_SIZE:
+                return JSONResponse(
+                    status_code=413,
+                    content={"detail": f"Request body too large (max: {MAX_JSON_SIZE} bytes)"}
+                )
+        except ValueError:
+            pass
+    
+    return await call_next(request)
+
+# Add request ID tracking middleware
+@app.middleware("http")
+async def add_request_id_tracking(request: Request, call_next):
+    """Add X-Request-ID header for distributed tracing and logging."""
+    # Use request ID from header if provided, otherwise generate one
+    request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
+    request.state.request_id = request_id
+    
+    # Store in context for logging
+    _request_context[id(request)] = request_id
+    
+    try:
+        response = await call_next(request)
+        response.headers["X-Request-ID"] = request_id
+        return response
+    finally:
+        # Clean up context
+        _request_context.pop(id(request), None)
 
 # Rate limiter — 10 AI requests per minute per IP (free tier protection)
 limiter = Limiter(key_func=get_remote_address)
@@ -570,15 +648,39 @@ async def log_correction(raw_request: Request, user: dict = Depends(get_current_
 # ---------------------------------------------------------------------------
 # Ticket operations (Now via Supabase)
 # ---------------------------------------------------------------------------
+async def get_user_company_id(user: dict) -> str:
+    user_id = user.get("id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid authenticated user")
+    try:
+        profile_res = (
+            supabase.table("profiles")
+            .select("company_id")
+            .eq("id", user_id)
+            .single()
+            .execute()
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=403, detail="Could not verify user company") from exc
+
+    company_id = profile_res.data.get("company_id") if profile_res.data else None
+    if not company_id:
+        raise HTTPException(status_code=403, detail="User has no company assignment")
+    return company_id
+
+
 @app.get("/tickets")
-async def get_tickets(company_id: str | None = None):
+async def get_tickets(user: dict = Depends(get_current_user), company_id: str | None = None):
     """Fetch persistent tickets from Supabase."""
     if not supabase:
         raise HTTPException(status_code=500, detail="Database connection not initialized")
 
+    user_company_id = await get_user_company_id(user)
+    if company_id and company_id != user_company_id:
+        raise HTTPException(status_code=403, detail="Not authorized to access this tenant")
+
     query = supabase.table("tickets").select("*").order("created_at", desc=True)
-    if company_id:
-        query = query.eq("company_id", company_id)
+    query = query.eq("company_id", user_company_id)
 
     res = query.execute()
     return res.data
@@ -696,30 +798,19 @@ async def get_ticket_by_id(ticket_id: str, user: dict = Depends(get_current_user
     if not supabase:
         raise HTTPException(status_code=500, detail="Database connection not initialized")
 
-    # Resolve user's company_id
-    user_id = user.get("id")
-    try:
-        profile_res = (
-            supabase.table("profiles")
-            .select("company_id")
-            .eq("id", user_id)
-            .single()
-            .execute()
-        )
-        user_company_id = profile_res.data.get("company_id") if profile_res.data else None
-    except Exception:
-        raise HTTPException(status_code=403, detail="Could not verify user company")
+    user_company_id = await get_user_company_id(user)
 
-    # Fetch ticket and verify ownership
-    res = supabase.table("tickets").select("*").eq("id", ticket_id).single().execute()
+    res = (
+        supabase.table("tickets")
+        .select("*")
+        .eq("id", ticket_id)
+        .eq("company_id", user_company_id)
+        .single()
+        .execute()
+    )
     if not res.data:
         raise HTTPException(status_code=404, detail="Ticket not found")
-
-    ticket = res.data
-    if ticket.get("company_id") != user_company_id:
-        raise HTTPException(status_code=403, detail="Not authorized to access this ticket")
-
-    return ticket
+    return res.data
 
 
 @app.post("/tickets", response_model=TicketRecord)

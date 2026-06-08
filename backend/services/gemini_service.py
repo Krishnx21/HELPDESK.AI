@@ -2,6 +2,8 @@ import os
 import base64
 import io
 import re
+import asyncio
+import time
 from PIL import Image
 from google import genai
 from dotenv import load_dotenv
@@ -11,25 +13,67 @@ from pathlib import Path
 env_path = Path(__file__).parent.parent / '.env'
 load_dotenv(dotenv_path=env_path)
 
+def retry_with_backoff(max_retries=3, initial_delay=1, max_delay=10):
+    """Decorator for retry logic with exponential backoff."""
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            retries = 0
+            delay = initial_delay
+            
+            while retries < max_retries:
+                try:
+                    return func(*args, **kwargs)
+                except (TimeoutError, Exception) as e:
+                    retries += 1
+                    if retries >= max_retries:
+                        raise
+                    
+                    # Only retry on specific errors (timeout, rate limit, transient)
+                    error_str = str(e).lower()
+                    if any(x in error_str for x in ["timeout", "deadline", "rate limit", "503", "429"]):
+                        print(f"[GeminiService] Retry {retries}/{max_retries} after {delay}s delay ({error_str[:50]})")
+                        time.sleep(delay)
+                        delay = min(delay * 2, max_delay)  # Exponential backoff
+                    else:
+                        raise
+            
+        return wrapper
+    return decorator
+
 class GeminiService:
     def __init__(self):
         self.api_key = os.getenv("GEMINI_API_KEY")
         self._initialized = False
         self.model_name = 'gemini-2.5-flash'
+        self.timeout = int(os.getenv("GEMINI_API_TIMEOUT", "30"))  # 30 second default timeout
+        self.max_retries = int(os.getenv("GEMINI_MAX_RETRIES", "3"))
         
         if self.api_key:
             try:
                 self.client = genai.Client(api_key=self.api_key)
                 self._initialized = True
-                print(f"[GeminiService] Connected to Google GenAI API (Model: {self.model_name})")
+                print(f"[GeminiService] Connected to Google GenAI API (Model: {self.model_name}, Timeout: {self.timeout}s, Retries: {self.max_retries})")
             except Exception as e:
                 print(f"[GeminiService] Initialization Error: {e}")
         else:
             print("[GeminiService] WARNING: GEMINI_API_KEY not found in environment.")
 
+    async def _call_with_timeout(self, coro, timeout_sec=None):
+        """Wrap API call with timeout protection."""
+        timeout_sec = timeout_sec or self.timeout
+        try:
+            return await asyncio.wait_for(asyncio.create_task(self._async_wrapper(coro)), timeout=timeout_sec)
+        except asyncio.TimeoutError:
+            raise TimeoutError(f"Gemini API request exceeded {timeout_sec}s timeout")
+
+    async def _async_wrapper(self, coro):
+        """Convert sync function to async."""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, lambda: coro)
+
     def analyze_image(self, image_base64: str) -> dict:
         """
-        Perform OCR and image analysis using Gemini logic.
+        Perform OCR and image analysis using Gemini logic with timeout protection.
         """
         if not self._initialized:
             return {
@@ -39,8 +83,7 @@ class GeminiService:
             }
 
         try:
-            # Decode base64 image (actually the new SDK handles base64 easily if we just pass bytes, 
-            # but we can also use PIL if we need to process it)
+            # Decode base64 image
             image_bytes = base64.b64decode(image_base64)
             img = Image.open(io.BytesIO(image_bytes))
 
@@ -55,9 +98,12 @@ class GeminiService:
                 "Problem: <problem>"
             )
 
-            response = self.client.models.generate_content(
-                model=self.model_name,
-                contents=[prompt, img]
+            # Wrap with timeout
+            response = self._timeout_call(
+                lambda: self.client.models.generate_content(
+                    model=self.model_name,
+                    contents=[prompt, img]
+                )
             )
             text_response = response.text
 
@@ -71,6 +117,13 @@ class GeminiService:
                 "detected_problem": problem_match.group(1).strip() if problem_match else ""
             }
 
+        except TimeoutError as e:
+            print(f"[GeminiService] Image Analysis Timeout: {e}")
+            return {
+                "image_description": "Image analysis timed out",
+                "ocr_text": "",
+                "detected_problem": ""
+            }
         except Exception as e:
             print(f"[GeminiService] Image Analysis Error: {e}")
             return {
@@ -79,9 +132,37 @@ class GeminiService:
                 "detected_problem": ""
             }
 
+    def _timeout_call(self, func, timeout_sec=None):
+        """Execute function with timeout using threading, with retry logic."""
+        import threading
+        timeout_sec = timeout_sec or self.timeout
+        
+        @retry_with_backoff(max_retries=self.max_retries, initial_delay=1, max_delay=10)
+        def call_with_retry():
+            result = [None]
+            exception = [None]
+            
+            def target():
+                try:
+                    result[0] = func()
+                except Exception as e:
+                    exception[0] = e
+            
+            thread = threading.Thread(target=target, daemon=True)
+            thread.start()
+            thread.join(timeout=timeout_sec)
+            
+            if thread.is_alive():
+                raise TimeoutError(f"API call exceeded {timeout_sec}s timeout")
+            if exception[0]:
+                raise exception[0]
+            return result[0]
+        
+        return call_with_retry()
+
     def get_summary(self, ticket_text: str) -> str:
         """
-        Generate a concise, one-line summary of the ticket text.
+        Generate a concise, one-line summary of the ticket text with timeout.
         """
         if not self._initialized:
             return ticket_text[:100] + ("…" if len(ticket_text) > 100 else "")
@@ -93,18 +174,23 @@ class GeminiService:
                 "that captures the technical essence. NO intro, NO filler, just the core problem headline. "
                 f"Ticket: '{ticket_text}'"
             )
-            response = self.client.models.generate_content(
-                model=self.model_name,
-                contents=prompt
+            response = self._timeout_call(
+                lambda: self.client.models.generate_content(
+                    model=self.model_name,
+                    contents=prompt
+                )
             )
             return response.text.strip().replace("\n", " ")
+        except TimeoutError as e:
+            print(f"[GeminiService] Summarization Timeout: {e}")
+            return ticket_text[:100] + ("…" if len(ticket_text) > 100 else "")
         except Exception as e:
             print(f"[GeminiService] Summarization Error: {e}")
             return ticket_text[:100] + ("…" if len(ticket_text) > 100 else "")
 
     def get_reasoning(self, ticket_text: str, category: str, team: str) -> dict:
         """
-        Get a deeper AI explanation and key takeaways for the ticket.
+        Get a deeper AI explanation and key takeaways for the ticket with timeout.
         """
         if not self._initialized:
             return {"reasoning": "", "highlights": []}
@@ -120,9 +206,11 @@ class GeminiService:
                 "REASONING: <text>\n"
                 "HIGHLIGHTS: <point1> | <point2> | <point3>"
             )
-            response = self.client.models.generate_content(
-                model=self.model_name,
-                contents=prompt
+            response = self._timeout_call(
+                lambda: self.client.models.generate_content(
+                    model=self.model_name,
+                    contents=prompt
+                )
             )
             text_response = response.text.strip()
 
@@ -137,6 +225,9 @@ class GeminiService:
                 "reasoning": reasoning,
                 "highlights": highlights
             }
+        except TimeoutError as e:
+            print(f"[GeminiService] Reasoning Timeout: {e}")
+            return {"reasoning": "", "highlights": []}
         except Exception as e:
             print(f"[GeminiService] Reasoning Error: {e}")
             return {"reasoning": "", "highlights": []}

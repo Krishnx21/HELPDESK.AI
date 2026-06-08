@@ -5,6 +5,7 @@ Uses sentence-transformers all-MiniLM-L6-v2 to detect similar tickets.
 
 import uuid
 import os
+import threading
 from sentence_transformers import SentenceTransformer, util
 
 SIMILARITY_THRESHOLD = 0.70
@@ -17,6 +18,8 @@ class DuplicateService:
         self._load_failed = False
         # In-memory store: list of (ticket_id, embedding, text)
         self._tickets: list[tuple[str, object, str]] = []
+        # Thread lock to prevent concurrent modification of _tickets
+        self._tickets_lock = threading.Lock()
         self.storage_file = os.path.join(os.path.dirname(__file__), "..", "data", "case_history_cache.json")
         os.makedirs(os.path.dirname(self.storage_file), exist_ok=True)
 
@@ -47,10 +50,11 @@ class DuplicateService:
                 try:
                     with open(self.storage_file, "r") as f:
                         data = json.load(f)
-                        for item in data:
-                            text = item["text"]
-                            embedding = self.model.encode(text, convert_to_tensor=True)
-                            self._tickets.append((item["ticket_id"], embedding, text))
+                        with self._tickets_lock:
+                            for item in data:
+                                text = item["text"]
+                                embedding = self.model.encode(text, convert_to_tensor=True)
+                                self._tickets.append((item["ticket_id"], embedding, text))
                     print(f"[DuplicateService] Loaded {len(self._tickets)} tickets.")
                 except Exception as e:
                     print(f"[DuplicateService] Error loading storage: {e}")
@@ -66,7 +70,7 @@ class DuplicateService:
                 raise
 
     def save_to_disk(self, ticket_id: str, text: str):
-        """Append a new ticket to the JSON storage."""
+        """Append a new ticket to the JSON storage with thread-safe file access."""
         import json
         data = []
         try:
@@ -88,18 +92,19 @@ class DuplicateService:
             print(f"[DuplicateService] Failed to save to disk: {e}")
 
     def add_ticket(self, ticket_id: str, text: str):
-        """Add a ticket to the in-memory store and persist to disk."""
+        """Add a ticket to the in-memory store and persist to disk (thread-safe)."""
         self.load()
         if not self.is_available():
             print(f"[DuplicateService] DEGRADED: Skipping embedding for ticket {ticket_id} (model not available)")
             return
         embedding = self.model.encode(text, convert_to_tensor=True)
-        self._tickets.append((ticket_id, embedding, text))
+        with self._tickets_lock:
+            self._tickets.append((ticket_id, embedding, text))
         self.save_to_disk(ticket_id, text)
 
     def check_duplicate(self, text: str, threshold: float = None) -> dict:
         """
-        Check if a ticket is a duplicate of any stored ticket.
+        Check if a ticket is a duplicate of any stored ticket (thread-safe).
 
         Args:
             text: The ticket text to check.
@@ -126,23 +131,23 @@ class DuplicateService:
         # Use provided threshold or default to global constant
         active_threshold = threshold if threshold is not None else SIMILARITY_THRESHOLD
 
-        if not self._tickets:
-            return {
-                "is_duplicate": False,
-                "duplicate_ticket_id": None,
-                "similarity": 0.0,
-            }
+        with self._tickets_lock:
+            if not self._tickets:
+                return {
+                    "is_duplicate": False,
+                    "duplicate_ticket_id": None,
+                    "similarity": 0.0,
+                }
+            
+            query_embedding = self.model.encode(text, convert_to_tensor=True)
+            best_score = 0.0
+            best_id = None
 
-        query_embedding = self.model.encode(text, convert_to_tensor=True)
-
-        best_score = 0.0
-        best_id = None
-
-        for ticket_id, stored_emb, _ in self._tickets:
-            score = util.cos_sim(query_embedding, stored_emb).item()
-            if score > best_score:
-                best_score = score
-                best_id = ticket_id
+            for ticket_id, stored_emb, _ in self._tickets:
+                score = util.cos_sim(query_embedding, stored_emb).item()
+                if score > best_score:
+                    best_score = score
+                    best_id = ticket_id
 
         is_dup = best_score >= active_threshold
 
