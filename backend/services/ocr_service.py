@@ -5,9 +5,11 @@ No API key required. Runs entirely on the local machine.
 
 import base64
 import io
+import os
 
 # Lazy import: easyocr is only imported once first use (heavy initialization ~3-5s)
 _reader = None
+MAX_IMAGE_BYTES = int(os.getenv("OCR_MAX_IMAGE_MB", "10")) * 1024 * 1024
 
 
 def _get_reader():
@@ -36,13 +38,21 @@ class OCRService:
             # Strip data URI prefix if present (e.g., "data:image/png;base64,...")
             if "," in image_base64:
                 image_base64 = image_base64.split(",", 1)[1]
-            
+
+            if len(image_base64) > MAX_IMAGE_BYTES * 2:
+                print("[OCRService] Image payload rejected: base64 input too large.")
+                return ""
+
             # Add back missing padding
             missing_padding = len(image_base64) % 4
             if missing_padding:
                 image_base64 += "=" * (4 - missing_padding)
 
-            image_bytes = base64.b64decode(image_base64)
+            image_bytes = base64.b64decode(image_base64, validate=True)
+            if len(image_bytes) > MAX_IMAGE_BYTES:
+                print("[OCRService] Image payload rejected: decoded image too large.")
+                return ""
+
             reader = _get_reader()
             results = reader.readtext(image_bytes, detail=0, paragraph=True)
             extracted = " ".join(results).strip()
