@@ -10,6 +10,7 @@ from pathlib import Path
 # Load environment variables from backend/.env
 env_path = Path(__file__).parent.parent / '.env'
 load_dotenv(dotenv_path=env_path)
+MAX_IMAGE_BYTES = int(os.getenv("GEMINI_IMAGE_MAX_MB", "10")) * 1024 * 1024
 
 class GeminiService:
     def __init__(self):
@@ -39,9 +40,17 @@ class GeminiService:
             }
 
         try:
-            # Decode base64 image (actually the new SDK handles base64 easily if we just pass bytes, 
-            # but we can also use PIL if we need to process it)
-            image_bytes = base64.b64decode(image_base64)
+            if "," in image_base64:
+                image_base64 = image_base64.split(",", 1)[1]
+            if len(image_base64) > MAX_IMAGE_BYTES * 2:
+                raise ValueError("Image payload exceeds configured base64 size limit")
+
+            image_bytes = base64.b64decode(image_base64, validate=True)
+            if len(image_bytes) > MAX_IMAGE_BYTES:
+                raise ValueError("Decoded image exceeds configured size limit")
+
+            img = Image.open(io.BytesIO(image_bytes))
+            img.verify()
             img = Image.open(io.BytesIO(image_bytes))
 
             prompt = (
