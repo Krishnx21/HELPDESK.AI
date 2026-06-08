@@ -771,6 +771,17 @@ async def analyze_only(request_body: TicketRequest):
         "confidence": 0.0,
     }
 
+    # Ensure these exist even if earlier steps fail
+    entities = []
+    dup_result = {"is_duplicate": False, "duplicate_ticket_id": None, "similarity": 0.0}
+    rag_match = None
+    vision_requested = bool(request_body.image_base64)
+    gemini_analysis = {
+        "ocr_text": request_body.image_text or "",
+        "image_description": "",
+    }
+
+
     settings = get_system_settings(request_body.company)
     confidence_threshold = settings["ai_confidence_threshold"]
     duplicate_sensitivity = settings["duplicate_sensitivity"]
