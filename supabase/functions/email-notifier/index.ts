@@ -11,10 +11,26 @@ const FROM_EMAIL = "HELPDESK.AI <bonthalamadhavi1@gmail.com>";
 
 serve(async (req: Request) => {
   try {
+    if (req.method !== "POST") {
+      return new Response(JSON.stringify({ error: "Method not allowed" }), { status: 405 });
+    }
     if (!RESEND_API_KEY) throw new Error("Missing RESEND_API_KEY");
 
     const payload = await req.json();
     const { type, record, email, code, link } = payload;
+    const allowedTypes = new Set(["INSERT", "OTP", "MAGIC_LINK"]);
+    if (!allowedTypes.has(type)) {
+      return new Response(JSON.stringify({ error: "Unsupported notification type" }), { status: 400 });
+    }
+    if (type === "OTP" && (!email || !/^\d{6}$/.test(String(code)))) {
+      return new Response(JSON.stringify({ error: "OTP notifications require email and a 6-digit code" }), { status: 400 });
+    }
+    if (type === "MAGIC_LINK" && (!email || !link?.startsWith("https://"))) {
+      return new Response(JSON.stringify({ error: "Magic-link notifications require email and an HTTPS link" }), { status: 400 });
+    }
+    if (type === "INSERT" && !record?.id) {
+      return new Response(JSON.stringify({ error: "Ticket notifications require a record id" }), { status: 400 });
+    }
 
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
