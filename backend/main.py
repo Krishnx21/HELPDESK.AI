@@ -82,7 +82,15 @@ def get_system_settings(company_id: str) -> dict:
             .execute()
         )
         if res.data:
-            return {**defaults, **res.data}
+            settings = {**defaults, **res.data}
+            settings["ai_confidence_threshold"] = min(
+                max(float(settings["ai_confidence_threshold"]), 0.0), 1.0
+            )
+            settings["duplicate_sensitivity"] = min(
+                max(float(settings["duplicate_sensitivity"]), 0.0), 1.0
+            )
+            settings["enable_auto_resolve"] = bool(settings["enable_auto_resolve"])
+            return settings
     except Exception as e:
         print(f"[WARNING] Could not fetch system_settings for company_id={company_id}: {e}")
     return defaults
