@@ -1,7 +1,8 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.42.0';
 
 const corsHeaders = {
-    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Origin': 'https://helpdeskaiv1.vercel.app',
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
     'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
@@ -13,6 +14,42 @@ serve(async (req) => {
     }
 
     try {
+        if (req.method !== 'POST') {
+            return new Response(JSON.stringify({ error: 'Method not allowed' }), {
+                status: 405,
+                headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            });
+        }
+
+        const authorization = req.headers.get('Authorization');
+        if (!authorization) {
+            return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+                status: 401,
+                headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            });
+        }
+
+        const supabase = createClient(
+            Deno.env.get('SUPABASE_URL') ?? '',
+            Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
+        );
+        const token = authorization.replace(/^Bearer\s+/i, '');
+        const { data: userData, error: userError } = await supabase.auth.getUser(token);
+        if (userError || !userData.user) {
+            throw new Error('Invalid session');
+        }
+        const { data: profile } = await supabase
+            .from('profiles')
+            .select('role')
+            .eq('id', userData.user.id)
+            .single();
+        if (!profile || !['admin', 'master_admin'].includes(profile.role)) {
+            return new Response(JSON.stringify({ error: 'Admin access required' }), {
+                status: 403,
+                headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            });
+        }
+
         const { userId, email, name, company } = await req.json();
 
         if (!email) {
