@@ -447,7 +447,8 @@ class TroubleshootResponse(BaseModel):
 
 
 @app.post("/ai/troubleshoot", response_model=TroubleshootResponse)
-async def troubleshoot(request: TroubleshootRequest):
+@limiter.limit("10/minute")
+async def troubleshoot(body: TroubleshootRequest, request: Request):
     """Get dynamic troubleshooting steps from Gemini."""
     if not gemini_service or not gemini_service._initialized:
         return TroubleshootResponse(
@@ -457,9 +458,9 @@ async def troubleshoot(request: TroubleshootRequest):
         )
 
     result = gemini_service.get_troubleshooting_step(
-        request.text,
-        request.history,
-        request.category,
+        body.text,
+        body.history,
+        body.category,
     )
     return TroubleshootResponse(**result)
 
@@ -476,16 +477,17 @@ class BugReportAnalysisResponse(BaseModel):
 
 
 @app.post("/ai/analyze_bug", response_model=BugReportAnalysisResponse)
-async def analyze_bug(request: BugReportAnalysisRequest):
+@limiter.limit("5/minute")
+async def analyze_bug(body: BugReportAnalysisRequest, request: Request):
     """Analyze a bug report using Gemini to generate a Probable Cause."""
     if not gemini_service or not gemini_service._initialized:
         return BugReportAnalysisResponse(probable_cause="AI Diagnostics are currently unavailable.")
 
     cause = gemini_service.analyze_bug_report(
-        request.bug_title,
-        request.description,
-        request.steps_to_reproduce,
-        request.console_errors,
+        body.bug_title,
+        body.description,
+        body.steps_to_reproduce,
+        body.console_errors,
     )
     return BugReportAnalysisResponse(probable_cause=cause)
 
