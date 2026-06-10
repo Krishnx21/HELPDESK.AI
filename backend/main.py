@@ -1158,7 +1158,8 @@ async def get_current_user(request: Request) -> dict:
     try:
         result = supabase.auth.get_user(token)
     except Exception as exc:
-        raise HTTPException(status_code=401, detail=f"Invalid session: {exc}") from exc
+        logging.getLogger(__name__).warning("Supabase session validation failed: %s", exc)
+        raise HTTPException(status_code=401, detail="Invalid session") from exc
 
     user = getattr(result, "user", None) or (result.get("user") if isinstance(result, dict) else None)
     if not user:
@@ -1190,7 +1191,8 @@ async def auth_login(body: LoginBody, response: Response):
     try:
         result = supabase.auth.sign_in_with_password({"email": body.email, "password": body.password})
     except Exception as exc:
-        raise HTTPException(status_code=401, detail=str(exc)) from exc
+        logging.getLogger(__name__).warning("Supabase login failed: %s", exc)
+        raise HTTPException(status_code=401, detail="Invalid credentials") from exc
 
     session = getattr(result, "session", None)
     user = getattr(result, "user", None)
@@ -1224,7 +1226,8 @@ async def auth_signup(body: SignupBody, response: Response):
             }
         )
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        logging.getLogger(__name__).warning("Supabase signup failed: %s", exc)
+        raise HTTPException(status_code=400, detail="Signup failed") from exc
 
     session = getattr(result, "session", None)
     user = getattr(result, "user", None)
