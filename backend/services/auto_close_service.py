@@ -142,6 +142,10 @@ class AutoCloseService:
             company_tickets: Dict[str, List] = {}
             for ticket in resolved_tickets:
                 company_id = ticket.get("company_id")
+                if not company_id:
+                    logger.warning(f"Ticket {ticket.get('id')} has no company_id, skipping")
+                    stats["skipped_count"] += 1
+                    continue
                 if company_id not in company_tickets:
                     company_tickets[company_id] = []
                 company_tickets[company_id].append(ticket)
