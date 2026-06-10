@@ -4,6 +4,7 @@ import { API_CONFIG } from '../config';
 
 const USE_MOCK = true;
 const API_BASE_URL = API_CONFIG.BACKEND_URL;
+const API_TIMEOUT_MS = Number(import.meta.env.VITE_API_TIMEOUT_MS || 30000);
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -70,11 +71,15 @@ export const api = {
   predictTicket: async (issueText, imageBase64 = "") => {
     try {
       // ALWAYS call the real backend for prediction if possible
-      const response = await axios.post(`${API_BASE_URL}/ai/analyze_ticket`, {
-        text: issueText,
-        image_base64: imageBase64,
-        image_text: ""
-      });
+      const response = await axios.post(
+        `${API_BASE_URL}/ai/analyze_ticket`,
+        {
+          text: issueText,
+          image_base64: imageBase64,
+          image_text: ""
+        },
+        { timeout: API_TIMEOUT_MS }
+      );
 
       const result = response.data;
 
@@ -120,7 +125,10 @@ export const api = {
 
   logCorrection: async (correctionPayload) => {
     try {
-      await axios.post(`${API_BASE_URL}/ai/log_correction`, correctionPayload);
+      await axios.post(`${API_BASE_URL}/ai/log_correction`, correctionPayload, {
+        timeout: API_TIMEOUT_MS,
+        withCredentials: true,
+      });
     } catch (error) {
       // Non-fatal: log but don't break the UI flow
       console.warn("[Correction Log] Failed to save correction:", error);
