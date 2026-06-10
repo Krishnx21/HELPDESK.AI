@@ -2,7 +2,7 @@ import axios from 'axios';
 import { MOCK_TICKETS } from './mockData';
 import { API_CONFIG } from '../config';
 
-const USE_MOCK = true;
+const USE_MOCK = import.meta.env.DEV && import.meta.env.VITE_USE_MOCK_API === 'true';
 const API_BASE_URL = API_CONFIG.BACKEND_URL;
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -42,6 +42,8 @@ export const api = {
       await delay(500);
       return getStorage('tickets', MOCK_TICKETS);
     }
+    const response = await axios.get(`${API_BASE_URL}/tickets`, { withCredentials: true });
+    return response.data;
   },
 
   createTicket: async (ticketData) => {
@@ -65,6 +67,7 @@ export const api = {
       setStorage('tickets', tickets);
       return { data: newTicket };
     }
+    return axios.post(`${API_BASE_URL}/tickets`, ticketData, { withCredentials: true });
   },
 
   predictTicket: async (issueText, imageBase64 = "") => {
