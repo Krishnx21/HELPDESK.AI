@@ -87,12 +87,15 @@ class AutoCloseService:
             True if successful, False otherwise
         """
         try:
-            self.supabase.table("tickets").update({
+            response = self.supabase.table("tickets").update({
                 "status": "closed",
                 "auto_closed": True,
                 "closed_at": datetime.now(timezone.utc).isoformat()
             }).eq("id", ticket_id).eq("company_id", company_id).execute()
-            
+
+            if not response.data:
+                raise RuntimeError("Ticket update matched no rows")
+
             stats["closed_count"] += 1
             logger.info(f"Closed ticket {ticket_id} for company {company_id}")
             return True
