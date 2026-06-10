@@ -68,8 +68,39 @@ Deno.serve(async (req) => {
   }
 
   try {
+    if (req.method !== "POST") {
+      return new Response(JSON.stringify({ error: "Method not allowed" }), {
+        status: 405,
+        headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
+      });
+    }
+    const contentLength = Number(req.headers.get("content-length") || 0);
+    if (contentLength > 100_000) {
+      return new Response(JSON.stringify({ error: "Request payload too large" }), {
+        status: 413,
+        headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
+      });
+    }
     const body = await req.json();
     const { provider, model, messages, prompt } = body;
+    if (model && (typeof model !== "string" || model.length > 100)) {
+      return new Response(JSON.stringify({ error: "Invalid model" }), {
+        status: 400,
+        headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
+      });
+    }
+    if (messages && (!Array.isArray(messages) || messages.length > 50)) {
+      return new Response(JSON.stringify({ error: "Invalid messages" }), {
+        status: 400,
+        headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
+      });
+    }
+    if (prompt && (typeof prompt !== "string" || prompt.length > 20_000)) {
+      return new Response(JSON.stringify({ error: "Invalid prompt" }), {
+        status: 400,
+        headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
+      });
+    }
 
     let upstreamResponse;
 
