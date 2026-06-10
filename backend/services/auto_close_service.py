@@ -34,12 +34,16 @@ class AutoCloseService:
 
     def __init__(self):
         """Initialize the auto-close service with Supabase client."""
+        supabase_url = os.getenv("SUPABASE_URL")
+        service_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+        if not supabase_url or not service_key:
+            raise RuntimeError("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required")
         self.supabase = create_client(
-            os.getenv("SUPABASE_URL"),
-            os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+            supabase_url,
+            service_key,
         )
         self.enabled = os.getenv("AUTO_CLOSE_ENABLED", "true").lower() == "true"
-        self.default_auto_close_days = int(os.getenv("AUTO_CLOSE_DAYS", "7"))
+        self.default_auto_close_days = max(1, min(int(os.getenv("AUTO_CLOSE_DAYS", "7")), 365))
         self.cron_schedule = os.getenv("AUTO_CLOSE_CRON_SCHEDULE", "0 2 * * *")  # 2 AM UTC daily
 
     def get_system_settings(self, company_id: str) -> Dict:
@@ -60,7 +64,10 @@ class AutoCloseService:
             
             if response.data:
                 return {
-                    "auto_close_days": response.data.get("auto_close_days", self.default_auto_close_days),
+                    "auto_close_days": max(
+                        1,
+                        min(int(response.data.get("auto_close_days", self.default_auto_close_days)), 365),
+                    ),
                     "auto_close_enabled": response.data.get("auto_close_enabled", True)
                 }
         except Exception as e:
