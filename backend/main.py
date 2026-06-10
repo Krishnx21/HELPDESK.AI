@@ -496,8 +496,31 @@ async def analyze_bug(request: BugReportAnalysisRequest):
 CORRECTIONS_LOG_PATH = Path(__file__).parent / "data" / "corrections_log.json"
 
 
+async def require_admin_user(request: Request) -> dict:
+    user = await get_current_user(request)
+    user_id = user.get("id")
+    try:
+        profile_res = (
+            supabase.table("profiles")
+            .select("role")
+            .eq("id", user_id)
+            .single()
+            .execute()
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=403, detail="Could not verify admin role") from exc
+
+    role = profile_res.data.get("role") if profile_res.data else None
+    if role not in {"admin", "master_admin"}:
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return user
+
+
 @app.post("/ai/log_correction")
-async def log_correction(raw_request: Request):
+async def log_correction(
+    raw_request: Request,
+    _admin: dict = Depends(require_admin_user),
+):
     """Log an admin correction when the AI prediction differs from the human decision."""
     try:
         body = await raw_request.json()
