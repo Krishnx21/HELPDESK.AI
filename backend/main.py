@@ -1107,7 +1107,8 @@ async def analyze_ticket_v2(request: TicketRequest):
             "confidence": prediction["category"]["confidence"],
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logging.getLogger(__name__).exception("V2 ticket analysis failed")
+        raise HTTPException(status_code=500, detail="Ticket analysis failed") from e
 
 
 # ---------------------------------------------------------------------------
