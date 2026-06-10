@@ -558,6 +558,10 @@ async def log_correction(raw_request: Request):
 # ---------------------------------------------------------------------------
 # Ticket operations (Now via Supabase)
 # ---------------------------------------------------------------------------
+async def require_current_user(request: Request) -> dict:
+    return await get_current_user(request)
+
+
 @app.get("/tickets")
 async def get_tickets(company_id: str | None = None):
     """Fetch persistent tickets from Supabase."""
@@ -573,10 +577,16 @@ async def get_tickets(company_id: str | None = None):
 
 
 @app.post("/tickets/save")
-async def save_ticket(request_body: TicketSaveRequest):
+async def save_ticket(
+    request_body: TicketSaveRequest,
+    user: dict = Depends(require_current_user),
+):
     """OFFICIAL PERSISTENCE: Saves the analyzed ticket to Supabase."""
     if not supabase:
         raise HTTPException(status_code=500, detail="Supabase connection not initialized.")
+
+    if str(request_body.user_id) != str(user.get("id")):
+        raise HTTPException(status_code=403, detail="Cannot create a ticket for another user")
 
     logger = logging.getLogger(__name__)
     try:
