@@ -116,6 +116,18 @@ const callOpenAICompat = async (config, promptText, history, image, baseUrl, ext
 
 // Core failover runner — shared by both exported functions
 const runWithFailover = async (promptText, history, image) => {
+    if (typeof promptText !== 'string' || promptText.length > 20000) {
+        throw new Error("AI prompt exceeds the supported size");
+    }
+    if (image && image.length > 12000000) {
+        throw new Error("AI image exceeds the supported size");
+    }
+    history = history.slice(-20).map((message) => ({
+        ...message,
+        text: String(message.text || '').slice(0, 4000),
+        image: message.image && message.image.length <= 12000000 ? message.image : null,
+    }));
+
     const configList = buildConfigList();
     if (configList.length === 0) throw new Error("No AI API keys configured in .env");
 
