@@ -48,7 +48,8 @@ class ClassifierServiceV2:
         # 3. Load Model
         self.model = MultiOutputClassifierV2(self.num_labels).to(self.device)
         model_path = os.path.join(MODEL_DIR, "model.pt")
-        self.model.load_state_dict(torch.load(model_path, map_location=self.device))
+        state_dict = torch.load(model_path, map_location=self.device, weights_only=True)
+        self.model.load_state_dict(state_dict)
         self.model.eval()
 
         # 4. Load Tokenizer
