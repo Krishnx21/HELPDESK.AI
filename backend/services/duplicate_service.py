@@ -8,6 +8,7 @@ import os
 from sentence_transformers import SentenceTransformer, util
 
 SIMILARITY_THRESHOLD = 0.70
+MAX_HISTORY_SIZE = max(1, int(os.environ.get("DUPLICATE_MAX_HISTORY", "10000")))
 
 
 class DuplicateService:
@@ -47,7 +48,7 @@ class DuplicateService:
                 try:
                     with open(self.storage_file, "r") as f:
                         data = json.load(f)
-                        for item in data:
+                        for item in data[-MAX_HISTORY_SIZE:]:
                             text = item["text"]
                             embedding = self.model.encode(text, convert_to_tensor=True)
                             self._tickets.append((item["ticket_id"], embedding, text))
@@ -81,6 +82,7 @@ class DuplicateService:
                         data = []
             
             data.append({"ticket_id": ticket_id, "text": text})
+            data = data[-MAX_HISTORY_SIZE:]
             with open(self.storage_file, "w") as f:
                 json.dump(data, f, indent=2)
             print(f"[DuplicateService] Indexed ticket {ticket_id} to case history.")
@@ -95,6 +97,7 @@ class DuplicateService:
             return
         embedding = self.model.encode(text, convert_to_tensor=True)
         self._tickets.append((ticket_id, embedding, text))
+        self._tickets = self._tickets[-MAX_HISTORY_SIZE:]
         self.save_to_disk(ticket_id, text)
 
     def check_duplicate(self, text: str, threshold: float = None) -> dict:
