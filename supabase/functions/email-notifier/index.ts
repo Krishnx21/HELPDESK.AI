@@ -12,11 +12,20 @@ const FROM_EMAIL = "HELPDESK.AI <bonthalamadhavi1@gmail.com>";
 serve(async (req: Request) => {
   try {
     if (!RESEND_API_KEY) throw new Error("Missing RESEND_API_KEY");
+    const authorization = req.headers.get("Authorization");
+    if (!authorization) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401 });
+    }
+
+    const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+    const token = authorization.replace(/^Bearer\s+/i, "");
+    const { data: caller, error: authError } = await supabase.auth.getUser(token);
+    if (authError || !caller.user) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401 });
+    }
 
     const payload = await req.json();
     const { type, record, email, code, link } = payload;
-
-    const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
     let recipientEmail = email || "support@helpdeskai.com";
     let subject = "[HELPDESK.AI] Notification";
