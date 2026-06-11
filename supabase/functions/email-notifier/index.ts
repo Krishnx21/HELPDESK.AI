@@ -8,6 +8,12 @@ const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
 // User Defined Secrets
 const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY") || "";
 const FROM_EMAIL = "HELPDESK.AI <bonthalamadhavi1@gmail.com>";
+const escapeHtml = (value: unknown) => String(value ?? "")
+  .replaceAll("&", "&amp;")
+  .replaceAll("<", "&lt;")
+  .replaceAll(">", "&gt;")
+  .replaceAll('"', "&quot;")
+  .replaceAll("'", "&#39;");
 
 serve(async (req: Request) => {
   try {
@@ -68,6 +74,9 @@ serve(async (req: Request) => {
     }
 
     const themeColor = "#10b981";
+    templateData = Object.fromEntries(
+      Object.entries(templateData).map(([key, value]) => [key, escapeHtml(value)])
+    );
 
     const html = `
 <!DOCTYPE html>
