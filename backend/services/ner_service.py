@@ -14,6 +14,7 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 MAX_LEN = 128
 
 import re
+import ipaddress
 
 # Regex patterns for high-fidelity extraction
 REGEX_PATTERNS = {
@@ -26,6 +27,16 @@ REGEX_PATTERNS = {
     "SYSTEM": r"\bProduction\b|\bStaging\b|\bInstance\b|\bMainframe\b",
     "BROWSER": r"Chrome|Edge|Firefox|Safari|Browser"
 }
+
+
+def _is_valid_regex_entity(label: str, value: str) -> bool:
+    if label != "IP_ADDRESS" or value.lower().startswith("ip"):
+        return True
+    try:
+        ipaddress.ip_address(value)
+        return True
+    except ValueError:
+        return False
 
 
 class NERService:
@@ -187,6 +198,8 @@ class NERService:
             for match in matches:
                 # Add to entities, avoiding duplicates (check if text already extracted)
                 match_text = match.group()
+                if not _is_valid_regex_entity(label, match_text):
+                    continue
                 if not any(e["text"].lower() == match_text.lower() for e in entities):
                     entities.append({
                         "text": match_text,
@@ -204,6 +217,8 @@ class NERService:
             matches = re.finditer(pattern, text, re.IGNORECASE)
             for match in matches:
                 match_text = match.group()
+                if not _is_valid_regex_entity(label, match_text):
+                    continue
                 if not any(e["text"].lower() == match_text.lower() for e in entities):
                     entities.append({
                         "text": match_text,
