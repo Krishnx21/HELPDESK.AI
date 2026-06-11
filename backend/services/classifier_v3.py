@@ -48,7 +48,12 @@ class ClassifierServiceV3:
             self.label_encoders = pickle.load(f)
 
         self.model = MultiOutputClassifierV3(self.num_labels).to(self.device)
-        self.model.load_state_dict(torch.load(os.path.join(MODEL_DIR, "model.pt"), map_location=self.device))
+        state_dict = torch.load(
+            os.path.join(MODEL_DIR, "model.pt"),
+            map_location=self.device,
+            weights_only=True,
+        )
+        self.model.load_state_dict(state_dict)
         self.model.eval()
 
         self.tokenizer = BertTokenizerFast.from_pretrained(MODEL_DIR)
