@@ -82,11 +82,11 @@ class NotificationRoutingMiddleware:
         except Exception as e:
             logger.warning(f"Could not fetch company settings for {company_id}: {str(e)}")
 
-        # Fail-open: allow notifications if settings unavailable
+        # Fail closed so a settings outage cannot violate company preferences.
         return {
-            "email_notifications": True,
-            "admin_alerts": True,
-            "digest_frequency": "daily"
+            "email_notifications": False,
+            "admin_alerts": False,
+            "digest_frequency": "disabled"
         }
 
     def get_system_settings(self, company_id: str) -> Dict:
