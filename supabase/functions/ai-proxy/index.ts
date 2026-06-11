@@ -41,6 +41,12 @@ const GROQ_KEYS = [
   Deno.env.get("GROQ_API_KEY_3"),
 ].filter(Boolean);
 
+const ALLOWED_MODELS = {
+  gemini: new Set(["gemma-3-27b-it", "gemini-2.5-flash", "gemini-2.5-flash-lite"]),
+  openrouter: new Set(["google/gemma-3-27b-it:free", "meta-llama/llama-3.2-3b-instruct:free"]),
+  groq: new Set(["llama3-8b-8192", "llama-3.1-8b-instant"]),
+};
+
 /** Try each key in pool until one succeeds. Handles 429 rate-limits automatically. */
 async function tryWithFailover(keys, buildRequest) {
   let lastError = null;
@@ -70,6 +76,17 @@ Deno.serve(async (req) => {
   try {
     const body = await req.json();
     const { provider, model, messages, prompt } = body;
+    const defaultModel = {
+      gemini: "gemma-3-27b-it",
+      openrouter: "google/gemma-3-27b-it:free",
+      groq: "llama3-8b-8192",
+    }[provider];
+    if (!defaultModel || !ALLOWED_MODELS[provider].has(model || defaultModel)) {
+      return new Response(JSON.stringify({ error: "Model is not allowed" }), {
+        status: 400,
+        headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
+      });
+    }
 
     let upstreamResponse;
 
