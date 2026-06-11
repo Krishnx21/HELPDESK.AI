@@ -125,6 +125,7 @@ class DuplicateService:
         
         # Use provided threshold or default to global constant
         active_threshold = threshold if threshold is not None else SIMILARITY_THRESHOLD
+        active_threshold = min(max(float(active_threshold), 0.0), 1.0)
 
         if not self._tickets:
             return {
