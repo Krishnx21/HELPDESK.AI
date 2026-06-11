@@ -105,11 +105,13 @@ export const api = {
       return {
         data: {
           ticket_id: "TCKT-MOCK-" + Math.floor(Math.random() * 10000),
-          category: "Hardware",
+          category: "Unknown",
+          subcategory: "Unknown",
           priority: "Medium",
-          assigned_team: "Hardware Support",
+          assigned_team: "General Support",
           auto_resolve: false,
           routing_confidence: 0.5,
+          needs_review: true,
           duplicate_probability: 0.0,
           summary: issueText.substring(0, 50) + "...",
           entities: []
