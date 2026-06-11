@@ -169,6 +169,10 @@ class AutoCloseService:
 
                             # Parse ISO format timestamp
                             updated_at = datetime.fromisoformat(updated_at_str.replace("Z", "+00:00"))
+                            if updated_at.tzinfo is None:
+                                updated_at = updated_at.replace(tzinfo=timezone.utc)
+                            else:
+                                updated_at = updated_at.astimezone(timezone.utc)
 
                             if updated_at < cutoff_date:
                                 self._close_ticket(ticket["id"], company_id, stats)
